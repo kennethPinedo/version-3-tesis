@@ -4,45 +4,65 @@ from typing import Optional
 from pydantic import BaseModel
 from database import get_db
 from alumnos.models import Alumno, Nota, Encuesta, PrediccionAcademica
-from alumnos.ml.etiquetado import codificar_condicion_social
 from alumnos.ml.prediccion import predecir_riesgo
 
 router = APIRouter()
 
 _MAPEO_NOTAS = {"AD": 20, "A": 17, "B": 14, "C": 11}
 
+# Mapeo condicion_social (string del frontend) → valor numérico 0-24
+# para que el modelo ML reciba el mismo rango con el que fue entrenado
+_SOCIAL_NUMERICO = {
+    "ninguna": 4, "ningún problema": 4,
+    "leve": 6,
+    "moderado": 12, "moderada": 12,
+    "grave": 20,
+}
+
 
 class GenerarPrediccionIn(BaseModel):
     alumno: int
 
 
+def _social_numerico(condicion: str) -> int:
+    return _SOCIAL_NUMERICO.get((condicion or "").lower().strip(), 4)
+
+
+def _tdah_coded(prob: float) -> int:
+    if prob <= 0.30: return 0
+    if prob <= 0.70: return 1
+    return 2
+
+
+def _nivel_tdah(da_total: int, hi_total: int) -> str:
+    if da_total > 10 or hi_total > 10:
+        return "Posible TDAH"
+    return "Sin TDAH"
+
+
 def _pred_dict(p: PrediccionAcademica, alumno_nombre: str = None) -> dict:
     cond = p.condiciones_psicoeducativas or ""
-    total_atencion = None
+    total_atencion       = None
     total_hiperactividad = None
+    prob_tdah_stored     = None
+
     for part in cond.split("|"):
         part = part.strip()
         if part.startswith("Atención (total):"):
-            try:
-                total_atencion = int(part.split(":")[1].strip().split("/")[0])
-            except Exception:
-                pass
+            try: total_atencion = int(part.split(":")[1].strip().split("/")[0])
+            except Exception: pass
         elif part.startswith("Hiperactividad (total):"):
-            try:
-                total_hiperactividad = int(part.split(":")[1].strip().split("/")[0])
-            except Exception:
-                pass
+            try: total_hiperactividad = int(part.split(":")[1].strip().split("/")[0])
+            except Exception: pass
+        elif part.startswith("Prob TDAH:"):
+            try: prob_tdah_stored = float(part.split(":")[1].strip())
+            except Exception: pass
+
     if total_atencion is not None and total_hiperactividad is not None:
-        if total_atencion >= 14 and total_hiperactividad >= 14:
-            nivel_tdah = "Posible TDAH - Tipo Combinado"
-        elif total_atencion >= 14:
-            nivel_tdah = "Posible TDAH - Déficit de Atención"
-        elif total_hiperactividad >= 14:
-            nivel_tdah = "Posible TDAH - Hiperactividad/Impulsividad"
-        else:
-            nivel_tdah = "Sin indicadores significativos de TDAH"
+        nivel_tdah = _nivel_tdah(total_atencion, total_hiperactividad)
     else:
         nivel_tdah = None
+
     return {
         "id": p.id,
         "alumno": p.alumno_id,
@@ -56,6 +76,7 @@ def _pred_dict(p: PrediccionAcademica, alumno_nombre: str = None) -> dict:
         "nivel_tdah": nivel_tdah,
         "total_atencion": total_atencion,
         "total_hiperactividad": total_hiperactividad,
+        "prob_tdah": prob_tdah_stored,
     }
 
 
@@ -101,34 +122,28 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
             detail="No se pudo generar prediccion. Verifique notas y encuesta.",
         )
 
-    total_atencion = sum(getattr(encuesta, f"A{i}") for i in range(1, 11))
-    total_hiperactividad = sum(getattr(encuesta, f"B{i}") for i in range(1, 11))
-    prom_atencion = total_atencion / 10
-    prom_hiperactividad = total_hiperactividad / 10
-    condicion_codificada = codificar_condicion_social(alumno.condicion_social)
+    total_atencion       = sum(getattr(encuesta, f"DA{i}") for i in range(1, 6))
+    total_hiperactividad = sum(getattr(encuesta, f"HI{i}") for i in range(1, 6))
+    total_conducta       = sum(getattr(encuesta, f"TC{i}") for i in range(1, 11))
 
-    riesgo, probabilidad = predecir_riesgo({
-        "edad": alumno.edad,
-        "condicion_social": condicion_codificada,
-        "promedio_notas": promedio_notas,
-        "prom_atencion": prom_atencion,
-        "prom_hiperactividad": prom_hiperactividad,
+    # ── Probabilidad TDAH (fórmula) ────────────────────────────────────────────
+    prob_tdah  = round(max(total_atencion, total_hiperactividad) / 15.0, 4)
+    nivel_tdah = _nivel_tdah(total_atencion, total_hiperactividad)
+
+    # ── Predicción de Riesgo Académico (modelo ML) ─────────────────────────────
+    condicion_social_num = _social_numerico(alumno.condicion_social)
+    nivel_riesgo, probabilidad = predecir_riesgo({
+        "DA_total":         total_atencion,
+        "HI_total":         total_hiperactividad,
+        "promedio_notas":   promedio_notas,
+        "condicion_social": condicion_social_num,
     })
 
-    tiene_atencion = total_atencion >= 14
-    tiene_hiperactividad = total_hiperactividad >= 14
-    if tiene_atencion and tiene_hiperactividad:
-        nivel_tdah = "Posible TDAH - Tipo Combinado"
-    elif tiene_atencion:
-        nivel_tdah = "Posible TDAH - Déficit de Atención"
-    elif tiene_hiperactividad:
-        nivel_tdah = "Posible TDAH - Hiperactividad/Impulsividad"
-    else:
-        nivel_tdah = "Sin indicadores significativos de TDAH"
-
     condiciones_texto = (
-        f"Atención (total): {total_atencion}/30 | "
-        f"Hiperactividad (total): {total_hiperactividad}/30 | "
+        f"Atención (total): {total_atencion}/15 | "
+        f"Hiperactividad (total): {total_hiperactividad}/15 | "
+        f"Trastorno de Conducta (total): {total_conducta}/30 | "
+        f"Prob TDAH: {prob_tdah:.4f} | "
         f"Condición social: {alumno.condicion_social} | "
         f"Promedio notas: {promedio_notas:.2f}"
     )
@@ -139,26 +154,28 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
         .first()
     )
     if pred:
-        pred.promedio_notas = promedio_notas
-        pred.nivel_riesgo = riesgo
-        pred.probabilidad = probabilidad
-        pred.prediccion_notas = f"{promedio_notas:.2f}"
+        pred.promedio_notas              = promedio_notas
+        pred.nivel_riesgo                = nivel_riesgo
+        pred.probabilidad                = probabilidad
+        pred.prediccion_notas            = f"{promedio_notas:.2f}"
         pred.condiciones_psicoeducativas = condiciones_texto
     else:
         pred = PrediccionAcademica(
-            alumno_id=alumno_id,
-            promedio_notas=promedio_notas,
-            nivel_riesgo=riesgo,
-            probabilidad=probabilidad,
-            prediccion_notas=f"{promedio_notas:.2f}",
-            condiciones_psicoeducativas=condiciones_texto,
+            alumno_id                = alumno_id,
+            promedio_notas           = promedio_notas,
+            nivel_riesgo             = nivel_riesgo,
+            probabilidad             = probabilidad,
+            prediccion_notas         = f"{promedio_notas:.2f}",
+            condiciones_psicoeducativas = condiciones_texto,
         )
         db.add(pred)
 
     db.commit()
     db.refresh(pred)
     result = _pred_dict(pred, f"{alumno.nombre} {alumno.apellido}")
-    result["nivel_tdah"] = nivel_tdah
-    result["total_atencion"] = total_atencion
+    result["nivel_tdah"]           = nivel_tdah
+    result["total_atencion"]       = total_atencion
     result["total_hiperactividad"] = total_hiperactividad
+    result["total_conducta"]       = total_conducta
+    result["prob_tdah"]            = prob_tdah
     return result

@@ -8,6 +8,15 @@ from database import engine, Base
 import alumnos.models  # noqa: F401 — registra todos los modelos ORM antes de create_all
 from alumnos.routers import alumnos, encuestas, notas, predicciones, expedientes
 
+# Migración: elimina tabla encuestas con esquema antiguo (A1-A10/B1-B10) para recrearla
+with engine.connect() as _conn:
+    try:
+        _conn.execute(text("SELECT A1 FROM encuestas LIMIT 1"))
+        _conn.execute(text("DROP TABLE encuestas"))
+        _conn.commit()
+    except Exception:
+        pass  # Tabla ya tiene nuevo esquema o no existe todavía
+
 Base.metadata.create_all(bind=engine)
 
 # Migración: agrega columna genero si no existe en tablas creadas anteriormente

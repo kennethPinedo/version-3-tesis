@@ -59,6 +59,15 @@ button:hover { opacity: 0.9; }
 .status { margin-top: 12px; font-weight: 600; }
 .card { background: #f8fbff; border: 1px solid #dbe7f3; border-radius: 10px; padding: 12px; margin: 8px 0; }
 
+/* ── Predicción card ──────────────────────────────────── */
+.pred-card { padding: 18px 20px; line-height: 1.7; }
+.pred-alumno { display: block; font-size: 1.05rem; font-weight: 700; color: #1e3a5f; margin-bottom: 12px; border-bottom: 1px solid #dbe7f3; padding-bottom: 8px; }
+.pred-section { margin-bottom: 10px; }
+.pred-section p { margin: 2px 0; }
+.pred-interpretacion { margin-top: 12px; background: #f0f6ff; border-left: 3px solid #3b82f6; border-radius: 0 6px 6px 0; padding: 10px 14px; }
+.pred-interpretacion__titulo { font-weight: 700; color: #1e3a5f; margin: 0 0 4px 0; }
+.pred-interpretacion__texto { margin: 0; color: #374151; font-size: 0.93rem; line-height: 1.6; }
+
 /* ── Dashboard ────────────────────────────────────────── */
 .dashboard { max-width: 1080px; }
 

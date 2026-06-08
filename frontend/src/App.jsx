@@ -7,21 +7,36 @@ import {
 const API = "http://127.0.0.1:8000/api";
 const views = ["dashboard", "alumno", "encuesta", "predicciones", "notas", "expediente"];
 const encuestaKeys = [
-  "A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10",
-  "B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B9", "B10",
+  "DA1", "DA2", "DA3", "DA4", "DA5",
+  "HI1", "HI2", "HI3", "HI4", "HI5",
+  "TC1", "TC2", "TC3", "TC4", "TC5", "TC6", "TC7", "TC8", "TC9", "TC10",
 ];
 
-const encuestaKeysA = encuestaKeys.filter((k) => k.startsWith("A"));
-const encuestaKeysB = encuestaKeys.filter((k) => k.startsWith("B"));
+const encuestaKeysDA = encuestaKeys.filter((k) => k.startsWith("DA"));
+const encuestaKeysHI = encuestaKeys.filter((k) => k.startsWith("HI"));
+const encuestaKeysTC = encuestaKeys.filter((k) => k.startsWith("TC"));
 
 const encuestaLabels = {
-  A1: "No presta atención a detalles", A2: "Dificultades mantener atención", A3: "No escucha cuando se le habla",
-  A4: "No sigue instrucciones", A5: "Dificultades organizar tareas", A6: "Evita tareas que requieren esfuerzo",
-  A7: "Pierde objetos necesarios", A8: "Se distrae fácilmente", A9: "Descuidado en actividades diarias",
-  A10: "Lentitud o falta de persistencia", B1: "Mueve manos o pies en exceso", B2: "Dificultad permanecer sentado",
-  B3: "Corre o trepa inapropiadamente", B4: "Dificultad jugar tranquilo", B5: "Está \"en marcha\" constantemente",
-  B6: "Habla en exceso", B7: "Responde antes de terminar pregunta", B8: "Dificultad esperar su turno",
-  B9: "Interrumpe o se inmiscuye", B10: "Reacciones explosivas",
+  DA1: "¿Se distrae fácilmente durante las actividades escolares o tareas cotidianas?",
+  DA2: "¿Presenta dificultades para mantener la atención durante períodos prolongados?",
+  DA3: "¿Parece no escuchar cuando se le habla directamente?",
+  DA4: "¿Deja sin terminar las tareas o actividades que comienza?",
+  DA5: "¿Tiene dificultades para organizar sus tareas, materiales o actividades escolares?",
+  HI1: "¿Presenta excesiva inquietud motora o dificultad para permanecer quieto?",
+  HI2: "¿Mueve constantemente las manos, los pies o cambia frecuentemente de posición?",
+  HI3: "¿Tiene dificultades para permanecer sentado cuando la situación lo requiere?",
+  HI4: "¿Actúa o responde impulsivamente sin pensar en las consecuencias?",
+  HI5: "¿Tiene dificultades para esperar su turno o respetar los tiempos de los demás?",
+  TC1: "¿Molesta frecuentemente a compañeros, familiares u otras personas?",
+  TC2: "¿Tiene dificultades para trabajar o participar en actividades grupales de manera adecuada?",
+  TC3: "¿Niega sus errores o culpa a otras personas por sus acciones?",
+  TC4: "¿Grita o responde de forma inapropiada en situaciones que requieren autocontrol?",
+  TC5: "¿Contesta de manera desafiante o irrespetuosa a figuras de autoridad?",
+  TC6: "¿Discute frecuentemente con otras personas por situaciones menores?",
+  TC7: "¿Se involucra en conflictos o peleas con otros compañeros o personas de su entorno?",
+  TC8: "¿Presenta explosiones de enojo o cambios bruscos de comportamiento difíciles de controlar?",
+  TC9: "¿Muestra dificultades para respetar normas, reglas o acuerdos establecidos?",
+  TC10: "¿Es frecuentemente impulsivo, irritable o presenta problemas para controlar su comportamiento social?",
 };
 
 const encuestaEscalaOpciones = [
@@ -112,15 +127,11 @@ function buildAcadPieData(nivelRiesgo, probabilidad) {
   ];
 }
 
-function buildTdahPieData(totalAtencion, totalHiperactividad) {
-  const comb = (totalAtencion + totalHiperactividad) / 60;
-  const alto = Math.round(comb * 70);
-  const bajo = Math.max(5, Math.round((1 - comb) * 60));
-  const moderado = Math.max(0, 100 - alto - bajo);
+function buildTdahPieData(probTdah) {
+  const pct = Math.round((probTdah ?? 0) * 100);
   return [
-    { name: "Alto", value: alto },
-    { name: "Moderado", value: moderado },
-    { name: "Bajo", value: bajo },
+    { name: "Posible TDAH", value: pct },
+    { name: "Sin TDAH",     value: 100 - pct },
   ].filter((d) => d.value > 0);
 }
 
@@ -133,8 +144,8 @@ function parseSocialPct(condStr) {
 function buildFactoresData(pred) {
   const socialPct = parseSocialPct(pred.condiciones_psicoeducativas || "");
   return [
-    { name: "Inatención", valor: Math.round((pred.total_atencion / 30) * 100) },
-    { name: "Hiperactividad", valor: Math.round((pred.total_hiperactividad / 30) * 100) },
+    { name: "Inatención", valor: Math.round((pred.total_atencion / 15) * 100) },
+    { name: "Hiperactividad", valor: Math.round((pred.total_hiperactividad / 15) * 100) },
     { name: "Rend. Académico", valor: Math.round(((20 - (pred.promedio_notas || 0)) / 20) * 100) },
     { name: "Cond. Social", valor: socialPct },
   ].sort((a, b) => b.valor - a.valor);
@@ -142,18 +153,24 @@ function buildFactoresData(pred) {
 
 function deriveTdahLevel(nivelTdah) {
   if (!nivelTdah) return "Bajo";
-  if (nivelTdah.includes("Tipo Combinado")) return "Alto";
-  if (nivelTdah.includes("Posible")) return "Moderado";
+  if (nivelTdah === "Posible TDAH") return "Moderado";
   return "Bajo";
+}
+
+function interpretacionTdah(nivelTdah) {
+  if (nivelTdah === "Posible TDAH") {
+    return "Se identifican indicadores compatibles con posible TDAH (DA > 10 o HI > 10). Se recomienda evaluación diagnóstica especializada.";
+  }
+  return "No se identifican indicadores significativos de TDAH (DA ≤ 10 y HI ≤ 10).";
 }
 
 function generarRecomendaciones(pred) {
   const recs = [];
-  if (pred.total_atencion >= 14) {
+  if (pred.total_atencion >= 11) {
     recs.push({ icon: "📚", text: "Refuerzo en técnicas de atención y concentración.", priority: "alta", priorityLabel: "Prioridad alta" });
     recs.push({ icon: "👤", text: "Seguimiento psicopedagógico individual.", priority: "alta", priorityLabel: "Prioridad alta" });
   }
-  if (pred.total_hiperactividad >= 14) {
+  if (pred.total_hiperactividad >= 11) {
     recs.push({ icon: "👥", text: "Talleres de manejo de impulsos y autorregulación.", priority: "media", priorityLabel: "Prioridad media" });
   }
   if (pred.nivel_riesgo === "Alto") {
@@ -443,16 +460,19 @@ export default function App() {
             ? (dashData.nivel_riesgo === "Alto" ? "#ef4444" : dashData.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e")
             : "#94a3b8";
 
-          const tdahLevel = dashData ? deriveTdahLevel(dashData.nivel_tdah) : null;
-          const tdahColor = tdahLevel === "Alto" ? "#ef4444" : tdahLevel === "Moderado" ? "#f97316" : "#22c55e";
+          const tdahLevel = dashData?.nivel_tdah ?? null;
+          const tdahColor = tdahLevel?.startsWith("Posible") ? "#f97316" : "#22c55e";
           const tdahProbPct = dashData
-            ? Math.round((dashData.total_atencion + dashData.total_hiperactividad) / 60 * 100)
+            ? Math.round((dashData.prob_tdah ?? (dashData.total_atencion + dashData.total_hiperactividad) / 30) * 100)
             : 0;
           const rendimiento = dashData ? Math.round((dashData.promedio_notas / 20) * 100) : 0;
           const rendColor = rendimiento >= 75 ? "#22c55e" : rendimiento >= 50 ? "#f97316" : "#ef4444";
 
+          const tdahProb    = dashData
+            ? (dashData.prob_tdah ?? ((dashData.total_atencion ?? 0) + (dashData.total_hiperactividad ?? 0)) / 30)
+            : 0;
           const acadPieData = dashData ? buildAcadPieData(dashData.nivel_riesgo, dashData.probabilidad) : [];
-          const tdahPieData = dashData ? buildTdahPieData(dashData.total_atencion, dashData.total_hiperactividad) : [];
+          const tdahPieData = dashData ? buildTdahPieData(tdahProb) : [];
           const factoresData = dashData ? buildFactoresData(dashData) : [];
           const recomendaciones = dashData ? generarRecomendaciones(dashData) : [];
 
@@ -523,7 +543,7 @@ export default function App() {
                         <span className="kpi-sub">
                           Probabilidad: {tdahProbPct}%
                           <span className="kpi-arrow" style={{ color: tdahColor }}>
-                            {tdahLevel === "Alto" ? " ↑" : tdahLevel === "Moderado" ? " ⚠" : " ✓"}
+                            {tdahLevel?.startsWith("Posible") ? " ⚠" : " ✓"}
                           </span>
                         </span>
                       </div>
@@ -576,7 +596,10 @@ export default function App() {
                             dataKey="value"
                           >
                             {tdahPieData.map((entry) => (
-                              <Cell key={entry.name} fill={RIESGO_COLORS[entry.name]} />
+                              <Cell
+                                key={entry.name}
+                                fill={entry.name === "Posible TDAH" ? "#f97316" : "#22c55e"}
+                              />
                             ))}
                           </Pie>
                           <Tooltip formatter={(v) => `${v}%`} />
@@ -722,10 +745,10 @@ export default function App() {
                   </select>
                 </div>
                 <div className="form-section full encuesta-bloque">
-                  <h3 className="form-section__title">Atención (A1-A10)</h3>
+                  <h3 className="form-section__title">Déficit de Atención (DA1-DA5)</h3>
                   <p className="form-legend">{encuestaLeyendaAtencion}</p>
                   <div className="grid encuesta-grid">
-                    {encuestaKeysA.map((k) => (
+                    {encuestaKeysDA.map((k) => (
                       <div key={k} className="field-group">
                         <label htmlFor={`encuesta-${k}`}>{k}: {encuestaLabels[k]}</label>
                         <select id={`encuesta-${k}`} value={encuestaForm[k]} onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}>
@@ -736,9 +759,22 @@ export default function App() {
                   </div>
                 </div>
                 <div className="form-section full encuesta-bloque">
-                  <h3 className="form-section__title">Hiperactividad/Impulsividad (B1-B10)</h3>
+                  <h3 className="form-section__title">Hiperactividad e Impulsividad (HI1-HI5)</h3>
                   <div className="grid encuesta-grid">
-                    {encuestaKeysB.map((k) => (
+                    {encuestaKeysHI.map((k) => (
+                      <div key={k} className="field-group">
+                        <label htmlFor={`encuesta-${k}`}>{k}: {encuestaLabels[k]}</label>
+                        <select id={`encuesta-${k}`} value={encuestaForm[k]} onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}>
+                          {encuestaEscalaOpciones.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="form-section full encuesta-bloque">
+                  <h3 className="form-section__title">Trastorno de Conducta (TC1-TC10)</h3>
+                  <div className="grid encuesta-grid">
+                    {encuestaKeysTC.map((k) => (
                       <div key={k} className="field-group">
                         <label htmlFor={`encuesta-${k}`}>{k}: {encuestaLabels[k]}</label>
                         <select id={`encuesta-${k}`} value={encuestaForm[k]} onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}>
@@ -786,11 +822,14 @@ export default function App() {
                 </span>
                 {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
                 <b>Indicador TDAH:</b>{" "}
-                <span style={{ color: p.nivel_tdah && p.nivel_tdah.startsWith("Posible") ? "#d62828" : "#14732b", fontWeight: "bold" }}>
+                <span style={{ color: p.nivel_tdah === "Posible TDAH" ? "#d62828" : "#14732b", fontWeight: "bold" }}>
                   {p.nivel_tdah ?? "—"}
                 </span><br />
                 {p.total_atencion != null && (
-                  <><b>Atención:</b> {p.total_atencion}/30{"  "}<b>Hiperactividad:</b> {p.total_hiperactividad}/30<br /></>
+                  <><b>Atención (DA):</b> {p.total_atencion}/15{"  "}<b>Hiperactividad (HI):</b> {p.total_hiperactividad}/15{"  "}{p.total_conducta != null && <><b>Conducta (TC):</b> {p.total_conducta}/30</>}<br /></>
+                )}
+                {p.prob_tdah != null && (
+                  <><b>Prob. TDAH:</b> {Math.round(p.prob_tdah * 100)}%<br /></>
                 )}
                 <b>Promedio de Notas:</b> {p.prediccion_notas}<br />
                 <b>Condiciones:</b> {p.condiciones_psicoeducativas}<br />

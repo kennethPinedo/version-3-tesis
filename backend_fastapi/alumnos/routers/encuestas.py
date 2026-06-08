@@ -7,17 +7,18 @@ from alumnos.models import Encuesta
 
 router = APIRouter()
 
-_KEYS_A = [f"A{i}" for i in range(1, 11)]
-_KEYS_B = [f"B{i}" for i in range(1, 11)]
-_ALL_KEYS = _KEYS_A + _KEYS_B
+_KEYS_DA = [f"DA{i}" for i in range(1, 6)]
+_KEYS_HI = [f"HI{i}" for i in range(1, 6)]
+_KEYS_TC = [f"TC{i}" for i in range(1, 11)]
+_ALL_KEYS = _KEYS_DA + _KEYS_HI + _KEYS_TC
 
 
 class EncuestaCreate(BaseModel):
     alumno: int
-    A1: int; A2: int; A3: int; A4: int; A5: int
-    A6: int; A7: int; A8: int; A9: int; A10: int
-    B1: int; B2: int; B3: int; B4: int; B5: int
-    B6: int; B7: int; B8: int; B9: int; B10: int
+    DA1: int; DA2: int; DA3: int; DA4: int; DA5: int
+    HI1: int; HI2: int; HI3: int; HI4: int; HI5: int
+    TC1: int; TC2: int; TC3: int; TC4: int; TC5: int
+    TC6: int; TC7: int; TC8: int; TC9: int; TC10: int
 
 
 def _encuesta_dict(e: Encuesta) -> dict:

@@ -1,230 +1,215 @@
 """
-Dataset sintético para predicción de TDAH y riesgo académico
-Escalas base: EDAH (Farré-Riba & Narbona, 1997) y Conners CTRS-R (Conners, 1997/2008)
-Población: adolescentes 12-14 años, educación básica
-Edad de registros: distribuciones validadas en población hispanohablante
+Dataset sintético TDAH — Riesgo Académico
+500 registros: Sin TDAH (375) | Posible TDAH (75) | Con TDAH (50)
 
-Fuentes científicas utilizadas:
-[1] Farré-Riba, A. & Narbona, J. (1997). Escalas de Conners en la evaluación del TDAH:
-    nuevo estudio factorial en niños españoles.
-    Revista de Neurología, 29(Supl 1), S200-S204.
-    https://www.neurologia.com/articulo/97294
-
-[2] Conners, C.K. (2008). Conners' Rating Scales–Revised (3rd ed.).
-    Multi-Health Systems. Toronto.
-    https://storefront.mhs.com/collections/conners-3
-
-[3] Polanczyk, G.V. et al. (2015). ADHD prevalence estimates across three decades:
-    an updated systematic review and meta-regression analysis.
-    Int. J. Epidemiology, 44(6), 1963-1972.
-    https://doi.org/10.1093/ije/dyv159
-
-[4] Barkley, R.A. (2023). Attention-Deficit Hyperactivity Disorder: A Handbook for
-    Diagnosis and Treatment (5th ed.). Guilford Press. New York.
-    https://www.guilford.com/books/Attention-Deficit-Hyperactivity-Disorder/Barkley/9781462554379
-
-[5] Salazar-Juárez, A. et al. (2024). Prevalencia del TDAH en escolares latinoamericanos:
-    revisión sistemática 2015-2024. Salud Mental, 47(1), 31-42.
-    https://doi.org/10.17711/SM.0185-3325.2024.004
-
-[6] Ministerio de Salud del Perú - MINSA (2023). Guía de Práctica Clínica para el
-    Diagnóstico y Tratamiento del TDAH en Niños y Adolescentes.
-    https://www.gob.pe/minsa
-
-[7] WHO Mental Health Atlas (2023). Child and Adolescent Mental Health — ADHD Data.
-    World Health Organization. Geneva.
-    https://www.who.int/publications/i/item/9789240049703
-
-Notas metodológicas:
-- Prevalencia TDAH en muestra: 30% (sobrerepresentado respecto al 7-10% poblacional
-  para mejorar el balance de clases en el entrenamiento)
-- Distribuciones basadas en datos normativos de las escalas originales
-- Parámetros EDAH: H media=0.55/ítem (no-TDAH), 1.85/ítem (TDAH); escala 0-3
-- Parámetros Conners: T-score media=46 (no-TDAH), 68-72 (TDAH); corte clínico T>=65
-- Promedio académico escala 0-20 (sistema peruano/latinoamericano)
-- Variable riesgo académico derivada de: 45% prob_TDAH + 40% rendimiento_académico + 15% condición_social
+Lógica de etiquetado:
+  prob_tdah    = max(DA_total, HI_total) / 15
+  tdah_coded   = 0 si prob ≤ 0.30 | 1 si 0.31-0.70 | 2 si 0.71-1.00
+  nota_coded   = 0 (AD 18-20) | 1 (A 15-17) | 2 (B 11-14) | 3 (C 0-10)
+  social_coded = 0 (0-8) | 1 (9-16) | 2 (17-24)
+  riesgo_score = 0.4*nota_coded + 0.3*tdah_coded + 0.3*social_coded
+  nivel_riesgo_academico: Bajo (<1.0) | Medio (1.0-1.9) | Alto (>=2.0)
 """
 
 import numpy as np
 import pandas as pd
 from pathlib import Path
 
-np.random.seed(2024)
-
-N_TOTAL          = 2000
-PREV_TDAH        = 0.30
-N_TDAH           = int(N_TOTAL * PREV_TDAH)   # 600
-N_NO_TDAH        = N_TOTAL - N_TDAH            # 1400
-
-# ─── Helpers ─────────────────────────────────────────────────────────────────
-
-def item_likert(media, sd, n, lo=0, hi=3):
-    """Ítem Likert 0-3 con distribución normal truncada y redondeada."""
-    return np.clip(np.round(np.random.normal(media, sd, n)).astype(int), lo, hi)
+rng = np.random.default_rng(42)
+OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
 
-def tscore(media, sd, n, lo=30.0, hi=90.0):
-    """T-score continuo (media=50, SD=10 en muestra normativa)."""
-    return np.round(np.clip(np.random.normal(media, sd, n), lo, hi), 1)
+def _dist_items(total: int, n_items: int, max_item: int) -> np.ndarray:
+    """Distribuye 'total' en n_items enteros, cada uno en [0, max_item]."""
+    items = np.zeros(n_items, dtype=int)
+    restante = int(total)
+    for i in range(n_items - 1):
+        upper = min(max_item, restante)
+        lower = max(0, restante - max_item * (n_items - 1 - i))
+        if lower > upper:
+            lower = upper
+        items[i] = int(rng.integers(lower, upper + 1))
+        restante -= items[i]
+    items[-1] = restante
+    return items
 
 
-def riesgo_academico(tdah_prob, promedio_notas, cond_social):
-    """
-    Regla determinista para nivel de riesgo académico:
-      score = 0.45*tdah_prob + 0.40*(1 - nota/20) + 0.15*(cond/3)
-      Bajo  < 0.28
-      Medio < 0.55
-      Alto  >= 0.55
-    """
-    s = (0.45 * tdah_prob
-         + 0.40 * (1.0 - promedio_notas / 20.0)
-         + 0.15 * (cond_social / 3.0))
-    return np.where(s < 0.28, "Bajo", np.where(s < 0.55, "Medio", "Alto"))
+def _gen_notas(spec: list) -> np.ndarray:
+    """spec: lista de (count, lo, hi). Devuelve array mezclado."""
+    parts = [np.round(rng.uniform(lo, hi, cnt), 1) for cnt, lo, hi in spec]
+    arr = np.concatenate(parts)
+    rng.shuffle(arr)
+    return arr
 
 
-# ─── Grupo SIN TDAH  (N=1400) ────────────────────────────────────────────────
+def _gen_social(spec: list) -> np.ndarray:
+    """spec: lista de (count, lo, hi) enteros inclusivos. Devuelve array mezclado."""
+    parts = [rng.integers(lo, hi + 1, cnt) for cnt, lo, hi in spec]
+    arr = np.concatenate(parts)
+    rng.shuffle(arr)
+    return arr
 
-def gen_no_tdah(n):
-    d = {}
-    d["edad"]             = np.random.choice([12, 13, 14], n, p=[0.33, 0.34, 0.33])
-    d["genero"]           = np.random.choice(["M", "F"], n, p=[0.50, 0.50])
-    d["grado"]            = d["edad"] - 5          # 12→7, 13→8, 14→9
-    d["condicion_social"] = np.random.choice([0, 1, 2, 3], n, p=[0.62, 0.24, 0.10, 0.04])
 
-    # EDAH — Hiperactividad (H1-H5): valores bajos [Fuente 1]
-    for i in range(1, 6):
-        d[f"edah_h{i}"]  = item_likert(0.55, 0.65, n)
-    # EDAH — Déficit de Atención (DA1-DA5) [Fuente 1]
-    for i in range(1, 6):
-        d[f"edah_da{i}"] = item_likert(0.60, 0.70, n)
-    # EDAH — Trastorno de Conducta (TC1-TC10) [Fuente 1]
-    for i in range(1, 11):
-        d[f"edah_tc{i}"] = item_likert(0.45, 0.60, n)
+def _nota_coded(nota: float) -> int:
+    if nota >= 18: return 0
+    if nota >= 15: return 1
+    if nota >= 11: return 2
+    return 3
 
-    d["edah_h_total"]    = sum(d[f"edah_h{i}"]  for i in range(1, 6))
-    d["edah_da_total"]   = sum(d[f"edah_da{i}"] for i in range(1, 6))
-    d["edah_tdah_total"] = d["edah_h_total"] + d["edah_da_total"]
-    d["edah_tc_total"]   = sum(d[f"edah_tc{i}"] for i in range(1, 11))
 
-    # Conners CTRS-R T-scores (normativo: media 50, SD 10) [Fuente 2]
-    d["conners_hiperact_tscore"]   = tscore(46, 8, n, 30, 70)
-    d["conners_inatencion_tscore"] = tscore(45, 9, n, 30, 70)
-    d["conners_oposicion_tscore"]  = tscore(47, 8, n, 30, 70)
-    d["conners_adhd_index_tscore"] = tscore(44, 7, n, 30, 68)
+def _social_coded(s: int) -> int:
+    if s <= 8: return 0
+    if s <= 16: return 1
+    return 2
 
-    # Rendimiento académico (escala 0-20) [Fuentes 6, 7]
-    d["promedio_notas"]      = np.round(np.clip(np.random.normal(15.5, 2.2, n), 10.0, 20.0), 1)
-    d["prom_atencion"]       = np.round(np.clip(np.random.normal(0.65, 0.45, n),  0.0,  3.0), 2)
-    d["prom_hiperactividad"] = np.round(np.clip(np.random.normal(0.50, 0.40, n),  0.0,  3.0), 2)
 
-    d["tdah_presente"]     = np.zeros(n, dtype=int)
-    d["tdah_probabilidad"] = np.round(np.clip(np.random.beta(2, 9, n), 0.02, 0.42), 3)
-    d["nivel_riesgo_academico"] = riesgo_academico(
-        d["tdah_probabilidad"], d["promedio_notas"], d["condicion_social"]
+def _tdah_coded(prob: float) -> int:
+    if prob <= 0.30: return 0
+    if prob <= 0.70: return 1
+    return 2
+
+
+def build_group(n: int, da_totals: np.ndarray, hi_totals: np.ndarray,
+                notas: np.ndarray, social: np.ndarray, tc_mean: float) -> list:
+    tc_matrix = np.clip(
+        np.round(rng.normal(tc_mean, 0.7, (n, 10))).astype(int), 0, 3
     )
-    return d
+    rows = []
+    for i in range(n):
+        da_arr = _dist_items(int(da_totals[i]), 5, 3)
+        hi_arr = _dist_items(int(hi_totals[i]), 5, 3)
+        tc_arr = tc_matrix[i]
+        da_t = int(da_arr.sum())
+        hi_t = int(hi_arr.sum())
+        tc_t = int(tc_arr.sum())
+        nota = float(notas[i])
+        soc = int(social[i])
+
+        prob_tdah = round(max(da_t, hi_t) / 15.0, 4)
+        td_c = _tdah_coded(prob_tdah)
+        nc   = _nota_coded(nota)
+        sc   = _social_coded(soc)
+        score = round(0.4 * nc + 0.3 * td_c + 0.3 * sc, 4)
+        riesgo = "Bajo" if score < 1.0 else ("Medio" if score < 2.0 else "Alto")
+
+        row = {}
+        for j, v in enumerate(da_arr, 1): row[f"DA{j}"] = int(v)
+        for j, v in enumerate(hi_arr, 1): row[f"HI{j}"] = int(v)
+        for j, v in enumerate(tc_arr, 1): row[f"TC{j}"] = int(v)
+        row.update({
+            "DA_total": da_t, "HI_total": hi_t, "TC_total": tc_t,
+            "promedio_notas": nota, "condicion_social": soc,
+            "prob_tdah": prob_tdah,
+            "tdah_coded": td_c, "nota_coded": nc, "social_coded": sc,
+            "riesgo_score": score, "nivel_riesgo_academico": riesgo,
+        })
+        rows.append(row)
+    return rows
 
 
-# ─── Grupo CON TDAH  (N=600) ─────────────────────────────────────────────────
+# ── Sin TDAH (375): max(DA,HI) en [0, 4] ─────────────────────────────────────
+# 10% notas bajas (C) = 37 | 10% condición social alta (17-24) = 37
+n_sin = 375
+da_sin = rng.integers(0, 5, n_sin)
+hi_sin = rng.integers(0, 5, n_sin)
+notas_sin  = _gen_notas([(95, 18.0, 20.0), (150, 15.0, 17.9),
+                          (93, 11.0, 14.9),  (37,  0.0, 10.9)])
+social_sin = _gen_social([(223, 0, 8), (115, 9, 16), (37, 17, 24)])
+rows_sin   = build_group(n_sin, da_sin, hi_sin, notas_sin, social_sin, tc_mean=0.5)
 
-def gen_tdah(n):
-    d = {}
-    d["edad"]             = np.random.choice([12, 13, 14], n, p=[0.33, 0.34, 0.33])
-    # TDAH ratio varón:mujer ≈ 2-3:1 en adolescentes [Fuente 4, 5]
-    d["genero"]           = np.random.choice(["M", "F"], n, p=[0.68, 0.32])
-    d["grado"]            = d["edad"] - 5
-    # Mayor condición social adversa en TDAH [Fuente 4]
-    d["condicion_social"] = np.random.choice([0, 1, 2, 3], n, p=[0.24, 0.32, 0.28, 0.16])
+# ── Posible TDAH (75): 5 ≤ max(DA,HI) ≤ 10 ──────────────────────────────────
+# 20% buenas notas (AD+A) = 15 | más C + social alta para casos Alto
+n_pos = 75
+dominant_p = rng.integers(5, 11, n_pos)   # 5-10
+other_p    = rng.integers(0, 11, n_pos)   # 0-10
+swap_p     = rng.random(n_pos) > 0.5
+da_pos = np.where(swap_p, dominant_p, other_p)
+hi_pos = np.where(swap_p, other_p,    dominant_p)
+notas_pos  = _gen_notas([(5, 18.0, 20.0), (10, 15.0, 17.9),
+                          (25, 11.0, 14.9), (35,  0.0, 10.9)])
+social_pos = _gen_social([(5, 0, 8), (25, 9, 16), (45, 17, 24)])
+rows_pos   = build_group(n_pos, da_pos, hi_pos, notas_pos, social_pos, tc_mean=1.0)
 
-    # EDAH — valores elevados (clínicamente significativos T≥70) [Fuente 1]
-    for i in range(1, 6):
-        d[f"edah_h{i}"]  = item_likert(1.85, 0.75, n)
-    for i in range(1, 6):
-        d[f"edah_da{i}"] = item_likert(2.05, 0.68, n)
-    for i in range(1, 11):
-        d[f"edah_tc{i}"] = item_likert(1.45, 0.88, n)
+# ── Con TDAH (50): max(DA,HI) ≥ 11 ───────────────────────────────────────────
+# 20% buenas notas (AD+A) = 10 | alta condición social desfavorable → genera mayoría de casos Alto
+n_con = 50
+dominant_c = rng.integers(11, 16, n_con)  # 11-15
+other_c    = rng.integers(0, 16, n_con)   # 0-15
+swap_c     = rng.random(n_con) > 0.5
+da_con = np.where(swap_c, dominant_c, other_c)
+hi_con = np.where(swap_c, other_c,    dominant_c)
+notas_con  = _gen_notas([(5, 18.0, 20.0), (5, 15.0, 17.9),
+                          (20, 11.0, 14.9), (20, 0.0, 10.9)])
+social_con = _gen_social([(2, 0, 8), (3, 9, 16), (45, 17, 24)])
+rows_con   = build_group(n_con, da_con, hi_con, notas_con, social_con, tc_mean=1.5)
 
-    d["edah_h_total"]    = sum(d[f"edah_h{i}"]  for i in range(1, 6))
-    d["edah_da_total"]   = sum(d[f"edah_da{i}"] for i in range(1, 6))
-    d["edah_tdah_total"] = d["edah_h_total"] + d["edah_da_total"]
-    d["edah_tc_total"]   = sum(d[f"edah_tc{i}"] for i in range(1, 11))
-
-    # Conners clínicamente significativos (T≥65) [Fuente 2]
-    d["conners_hiperact_tscore"]   = tscore(68,  8, n, 50, 90)
-    d["conners_inatencion_tscore"] = tscore(70,  7, n, 52, 90)
-    d["conners_oposicion_tscore"]  = tscore(62,  9, n, 44, 90)
-    d["conners_adhd_index_tscore"] = tscore(72,  6, n, 55, 90)
-
-    # Rendimiento académico deteriorado [Fuente 4, 5]
-    d["promedio_notas"]      = np.round(np.clip(np.random.normal(10.6, 2.0, n),  4.0, 16.0), 1)
-    d["prom_atencion"]       = np.round(np.clip(np.random.normal(2.15, 0.48, n), 0.5,  3.0), 2)
-    d["prom_hiperactividad"] = np.round(np.clip(np.random.normal(1.95, 0.55, n), 0.5,  3.0), 2)
-
-    d["tdah_presente"]     = np.ones(n, dtype=int)
-    d["tdah_probabilidad"] = np.round(np.clip(np.random.beta(8, 2, n), 0.58, 0.99), 3)
-    d["nivel_riesgo_academico"] = riesgo_academico(
-        d["tdah_probabilidad"], d["promedio_notas"], d["condicion_social"]
-    )
-    return d
-
-
-# ─── Construir DataFrame completo ────────────────────────────────────────────
-
-df_no = pd.DataFrame(gen_no_tdah(N_NO_TDAH))
-df_si = pd.DataFrame(gen_tdah(N_TDAH))
-
+# ── Construir DataFrame ───────────────────────────────────────────────────────
 df = (
-    pd.concat([df_no, df_si], ignore_index=True)
+    pd.DataFrame(rows_sin + rows_pos + rows_con)
     .sample(frac=1, random_state=42)
     .reset_index(drop=True)
 )
 df.insert(0, "id", range(1, len(df) + 1))
 
-# ─── División 70/15/15 ────────────────────────────────────────────────────────
+# ── Split 70 / 15 / 15 ───────────────────────────────────────────────────────
 n       = len(df)
-n_train = int(n * 0.70)   # 1400
-n_val   = int(n * 0.15)   # 300
-# n_test  = n - n_train - n_val  # 300
+n_train = int(n * 0.70)   # 350
+n_val   = int(n * 0.15)   # 75
 
 df["split"] = "test"
-df.loc[df.index[:n_train],           "split"] = "train"
+df.loc[df.index[:n_train],              "split"] = "train"
 df.loc[df.index[n_train:n_train+n_val], "split"] = "val"
 
-# ─── Guardar archivos ─────────────────────────────────────────────────────────
-out = Path(__file__).parent / "output"
-out.mkdir(exist_ok=True)
+# ── Guardar ───────────────────────────────────────────────────────────────────
+df.to_csv(OUTPUT_DIR / "dataset_tdah_completo.csv", index=False)
+df[df.split == "train"].drop(columns="split").to_csv(OUTPUT_DIR / "train.csv", index=False)
+df[df.split == "val"  ].drop(columns="split").to_csv(OUTPUT_DIR / "val.csv",   index=False)
+df[df.split == "test" ].drop(columns="split").to_csv(OUTPUT_DIR / "test.csv",  index=False)
 
-df.to_csv(out / "dataset_tdah_completo.csv", index=False)
-df[df.split == "train"].drop(columns="split").to_csv(out / "train.csv",  index=False)
-df[df.split == "val"  ].drop(columns="split").to_csv(out / "val.csv",    index=False)
-df[df.split == "test" ].drop(columns="split").to_csv(out / "test.csv",   index=False)
-
-# ─── Reporte ──────────────────────────────────────────────────────────────────
-print("=" * 55)
+# ── Reporte ───────────────────────────────────────────────────────────────────
+print("=" * 60)
 print("  DATASET TDAH — REPORTE DE GENERACIÓN")
-print("=" * 55)
+print("=" * 60)
 print(f"  Total registros : {len(df)}")
-print(f"  Train           : {(df.split=='train').sum()} (70 %)")
-print(f"  Validación      : {(df.split=='val').sum()} (15 %)")
-print(f"  Test            : {(df.split=='test').sum()} (15 %)")
+print(f"  Train           : {(df.split=='train').sum()} (70%)")
+print(f"  Validación      : {(df.split=='val').sum()} (15%)")
+print(f"  Test            : {(df.split=='test').sum()} (15%)")
 print()
-print("  Distribución TDAH (tdah_presente):")
-v = df.tdah_presente.value_counts().sort_index()
-print(f"    0 - Sin TDAH  : {v.get(0,0)} ({v.get(0,0)/len(df)*100:.1f} %)")
-print(f"    1 - Con TDAH  : {v.get(1,0)} ({v.get(1,0)/len(df)*100:.1f} %)")
+print("  Grupos TDAH:")
+print(f"    Sin TDAH    (max DA/HI 0-4)  : {n_sin}")
+print(f"    Posible TDAH(max DA/HI 5-10) : {n_pos}")
+print(f"    Con TDAH    (max DA/HI 11-15): {n_con}")
 print()
 print("  Distribución Riesgo Académico:")
-r = df.nivel_riesgo_academico.value_counts()
+r = df["nivel_riesgo_academico"].value_counts()
 for nivel in ["Bajo", "Medio", "Alto"]:
-    print(f"    {nivel:<6}: {r.get(nivel,0)} ({r.get(nivel,0)/len(df)*100:.1f} %)")
+    cnt = r.get(nivel, 0)
+    print(f"    {nivel:<6}: {cnt:>4} ({cnt/len(df)*100:.1f}%)")
 print()
-print("  Estadísticas EDAH (totales):")
-print(f"    edah_tdah_total — media: {df.edah_tdah_total.mean():.2f}, SD: {df.edah_tdah_total.std():.2f}")
-print(f"    edah_tc_total   — media: {df.edah_tc_total.mean():.2f}, SD: {df.edah_tc_total.std():.2f}")
+# Validación de constraints del diseño
+df_sin  = df[df.DA_total.le(4) & df.HI_total.le(4)]
+df_pos  = df[df[["DA_total","HI_total"]].max(axis=1).between(5, 10)]
+df_con  = df[df[["DA_total","HI_total"]].max(axis=1).ge(11)]
+notas_bajas_sin  = (df_sin.nota_coded == 3).sum()
+social_alta_sin  = (df_sin.social_coded == 2).sum()
+buenas_pos       = (df_pos.nota_coded.le(1)).sum()
+buenas_con       = (df_con.nota_coded.le(1)).sum()
+print("  Validación de constraints:")
+print(f"    Sin TDAH — notas bajas (C):    {notas_bajas_sin}/{len(df_sin)} "
+      f"({notas_bajas_sin/len(df_sin)*100:.1f}%)  [target ~10%]")
+print(f"    Sin TDAH — social alta:         {social_alta_sin}/{len(df_sin)} "
+      f"({social_alta_sin/len(df_sin)*100:.1f}%)  [target ~10%]")
+print(f"    Posible TDAH — notas buenas:   {buenas_pos}/{len(df_pos)} "
+      f"({buenas_pos/len(df_pos)*100:.1f}%)  [target 20%]")
+print(f"    Con TDAH — notas buenas:       {buenas_con}/{len(df_con)} "
+      f"({buenas_con/len(df_con)*100:.1f}%)  [target 20%]")
+print(f"    Casos Riesgo Alto:             {r.get('Alto',0)}  [target 50-75]")
 print()
-print("  Estadísticas Conners (T-scores):")
-for col in ["conners_hiperact_tscore","conners_inatencion_tscore","conners_adhd_index_tscore"]:
-    print(f"    {col:<33} media: {df[col].mean():.1f}, SD: {df[col].std():.1f}")
+print("  Estadísticas DA/HI totales:")
+for col in ["DA_total", "HI_total"]:
+    print(f"    {col}: media={df[col].mean():.2f}  SD={df[col].std():.2f}  "
+          f"[{df[col].min()}, {df[col].max()}]")
 print()
-print(f"  Archivos guardados en: {out.resolve()}")
-print("=" * 55)
+print(f"  Archivos guardados en: {OUTPUT_DIR.resolve()}")
+print("=" * 60)

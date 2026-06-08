@@ -27,7 +27,7 @@ TRAIN_CSV   = os.path.join(BASE, "dataset", "output", "train.csv")
 VAL_CSV     = os.path.join(BASE, "dataset", "output", "val.csv")
 TEST_CSV    = os.path.join(BASE, "dataset", "output", "test.csv")
 
-FEATURES = ["edad", "condicion_social", "promedio_notas", "prom_atencion", "prom_hiperactividad"]
+FEATURES = ["DA_total", "HI_total", "promedio_notas", "condicion_social"]
 TARGET   = "nivel_riesgo_academico"
 STR2INT  = {"Bajo": 0, "Medio": 1, "Alto": 2}
 INT2STR  = {0: "Bajo", 1: "Medio", 2: "Alto"}
@@ -54,11 +54,15 @@ X_tv, y_tv   = prep(trainval)
 SEP = "=" * 64
 
 # ── Modelo actual (baseline) ──────────────────────────────────────────────────
-modelo_viejo = joblib.load(MODELO_PATH)
+_baseline_disponible = os.path.exists(MODELO_PATH)
+if _baseline_disponible:
+    try:
+        modelo_viejo = joblib.load(MODELO_PATH)
+        # Verificar compatibilidad de features
+        _ = modelo_viejo.predict(X_te[:1])
+    except Exception:
+        _baseline_disponible = False
 
-print(f"\n{SEP}")
-print("  FASE 1: Metricas del modelo ACTUAL (baseline)")
-print(SEP)
 
 def evaluar(modelo, X, y, nombre=""):
     yp    = modelo.predict(X)
@@ -74,14 +78,23 @@ def evaluar(modelo, X, y, nombre=""):
             "f1_bajo": f1_per[0], "f1_medio": f1_per[1], "f1_alto": f1_per[2],
             "yp": yp, "yp_s": yp_s, "y_s": y_s}
 
-m_old = evaluar(modelo_viejo, X_te, y_te)
-print(f"\n  Accuracy   : {m_old['acc']:.4f}")
-print(f"  F1 macro   : {m_old['f1_macro']:.4f}")
-print(f"  AUC-ROC    : {m_old['auc']:.4f}")
-print(f"  Kappa      : {m_old['kappa']:.4f}")
-print(f"  F1 Bajo    : {m_old['f1_bajo']:.4f}")
-print(f"  F1 Medio   : {m_old['f1_medio']:.4f}")
-print(f"  F1 Alto    : {m_old['f1_alto']:.4f}  <<< PROBLEMA")
+
+print(f"\n{SEP}")
+print("  FASE 1: Metricas del modelo ACTUAL (baseline)")
+print(SEP)
+
+if _baseline_disponible:
+    m_old = evaluar(modelo_viejo, X_te, y_te)
+    print(f"\n  Accuracy   : {m_old['acc']:.4f}")
+    print(f"  F1 macro   : {m_old['f1_macro']:.4f}")
+    print(f"  AUC-ROC    : {m_old['auc']:.4f}")
+    print(f"  Kappa      : {m_old['kappa']:.4f}")
+    print(f"  F1 Bajo    : {m_old['f1_bajo']:.4f}")
+    print(f"  F1 Medio   : {m_old['f1_medio']:.4f}")
+    print(f"  F1 Alto    : {m_old['f1_alto']:.4f}")
+else:
+    m_old = None
+    print("\n  (Sin modelo previo — se omite baseline)")
 
 # ── Distribución y pesos ──────────────────────────────────────────────────────
 print(f"\n{SEP}")
@@ -169,30 +182,37 @@ print("  Modelo entrenado.")
 
 # ── Evaluacion comparativa ────────────────────────────────────────────────────
 print(f"\n{SEP}")
-print("  FASE 5: Comparacion ANTES vs DESPUES (Test set, n=300)")
+print(f"  FASE 5: Comparacion ANTES vs DESPUES (Test set, n={len(X_te)})")
 print(SEP)
 
 m_new = evaluar(modelo_nuevo, X_te, y_te)
 
 def delta(v_new, v_old):
     d = v_new - v_old
-    sign = "+" if d >= 0 else ""
-    return f"{sign}{d:+.4f}"
+    return f"{d:+.4f}"
 
-print(f"\n  {'Metrica':<22} {'Antes':>8}  {'Despues':>8}  {'Cambio':>10}")
-print(f"  {'-'*54}")
-filas = [
-    ("Accuracy",   m_old["acc"],      m_new["acc"]),
-    ("F1 macro",   m_old["f1_macro"], m_new["f1_macro"]),
-    ("AUC-ROC",    m_old["auc"],      m_new["auc"]),
-    ("Kappa",      m_old["kappa"],    m_new["kappa"]),
-    ("F1 - Bajo",  m_old["f1_bajo"],  m_new["f1_bajo"]),
-    ("F1 - Medio", m_old["f1_medio"], m_new["f1_medio"]),
-    ("F1 - Alto",  m_old["f1_alto"],  m_new["f1_alto"]),
-]
-for nombre, vo, vn in filas:
-    flag = " <<<" if nombre == "F1 - Alto" else ""
-    print(f"  {nombre:<22} {vo:>8.4f}  {vn:>8.4f}  {delta(vn, vo):>10}{flag}")
+if m_old is not None:
+    print(f"\n  {'Metrica':<22} {'Antes':>8}  {'Despues':>8}  {'Cambio':>10}")
+    print(f"  {'-'*54}")
+    filas = [
+        ("Accuracy",   m_old["acc"],      m_new["acc"]),
+        ("F1 macro",   m_old["f1_macro"], m_new["f1_macro"]),
+        ("AUC-ROC",    m_old["auc"],      m_new["auc"]),
+        ("Kappa",      m_old["kappa"],    m_new["kappa"]),
+        ("F1 - Bajo",  m_old["f1_bajo"],  m_new["f1_bajo"]),
+        ("F1 - Medio", m_old["f1_medio"], m_new["f1_medio"]),
+        ("F1 - Alto",  m_old["f1_alto"],  m_new["f1_alto"]),
+    ]
+    for nombre, vo, vn in filas:
+        print(f"  {nombre:<22} {vo:>8.4f}  {vn:>8.4f}  {delta(vn, vo):>10}")
+else:
+    print(f"\n  Accuracy : {m_new['acc']:.4f}")
+    print(f"  F1 macro : {m_new['f1_macro']:.4f}")
+    print(f"  AUC-ROC  : {m_new['auc']:.4f}")
+    print(f"  Kappa    : {m_new['kappa']:.4f}")
+    print(f"  F1 Bajo  : {m_new['f1_bajo']:.4f}")
+    print(f"  F1 Medio : {m_new['f1_medio']:.4f}")
+    print(f"  F1 Alto  : {m_new['f1_alto']:.4f}")
 
 print(f"\n  Reporte completo por clase (nuevo modelo):")
 print(f"  {'-'*58}")
@@ -212,7 +232,12 @@ print(SEP)
 joblib.dump(modelo_nuevo, MODELO_PATH)
 print(f"\n  Modelo guardado en: {MODELO_PATH}")
 print(f"\n  Resumen final:")
-print(f"    F1 Alto:  {m_old['f1_alto']:.4f}  ->  {m_new['f1_alto']:.4f}  ({'+' if m_new['f1_alto']>m_old['f1_alto'] else ''}{(m_new['f1_alto']-m_old['f1_alto'])*100:.1f} puntos)")
-print(f"    F1 macro: {m_old['f1_macro']:.4f}  ->  {m_new['f1_macro']:.4f}")
-print(f"    Accuracy: {m_old['acc']:.4f}  ->  {m_new['acc']:.4f}")
+if m_old is not None:
+    print(f"    F1 Alto:  {m_old['f1_alto']:.4f}  ->  {m_new['f1_alto']:.4f}  ({(m_new['f1_alto']-m_old['f1_alto'])*100:+.1f} puntos)")
+    print(f"    F1 macro: {m_old['f1_macro']:.4f}  ->  {m_new['f1_macro']:.4f}")
+    print(f"    Accuracy: {m_old['acc']:.4f}  ->  {m_new['acc']:.4f}")
+else:
+    print(f"    F1 Alto:  {m_new['f1_alto']:.4f}")
+    print(f"    F1 macro: {m_new['f1_macro']:.4f}")
+    print(f"    Accuracy: {m_new['acc']:.4f}")
 print(f"\n{SEP}\n")
