@@ -19,12 +19,14 @@ class EncuestaCreate(BaseModel):
     HI1: int; HI2: int; HI3: int; HI4: int; HI5: int
     TC1: int; TC2: int; TC3: int; TC4: int; TC5: int
     TC6: int; TC7: int; TC8: int; TC9: int; TC10: int
+    inasistencias: int = 0
 
 
 def _encuesta_dict(e: Encuesta) -> dict:
     d = {"id": e.id, "alumno": e.alumno_id}
     for k in _ALL_KEYS:
         d[k] = getattr(e, k)
+    d["inasistencias"]   = getattr(e, "inasistencias", 0)
     d["fecha_aplicacion"] = str(e.fecha_aplicacion) if e.fecha_aplicacion else None
     return d
 

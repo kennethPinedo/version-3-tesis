@@ -5,7 +5,7 @@ import {
 } from "recharts";
 
 const API = "http://127.0.0.1:8000/api";
-const views = ["dashboard", "alumno", "encuesta", "predicciones", "notas", "expediente"];
+const views = ["dashboard", "alumno", "lista", "encuesta", "predicciones", "notas", "expediente"];
 const encuestaKeys = [
   "DA1", "DA2", "DA3", "DA4", "DA5",
   "HI1", "HI2", "HI3", "HI4", "HI5",
@@ -60,6 +60,19 @@ function normalizarCalificacionLiteral(texto) {
   return null;
 }
 
+const NOTA_NUM = { C: 0, B: 1, A: 2, AD: 3 };
+const NOTA_LET = ["C", "B", "A", "AD"];
+
+// Promedio de una lista de notas literales → { num, letra } (o null si no hay notas)
+function promedioLiteral(literales) {
+  const vals = (literales || [])
+    .map((l) => NOTA_NUM[normalizarCalificacionLiteral(l)])
+    .filter((v) => v !== undefined);
+  if (!vals.length) return null;
+  const num = vals.reduce((s, v) => s + v, 0) / vals.length;
+  return { num: Math.round(num * 100) / 100, letra: NOTA_LET[Math.round(num)] };
+}
+
 const evalSocialLabels = {
   c1: "C1: Asistencia y Participación Familiar",
   c2: "C2: Estabilidad Familiar",
@@ -81,12 +94,10 @@ const socialSelectOptions = [
 const initialAlumno = {
   nombre: "", apellido: "", contacto_emergente: "", edad: "", grado: "",
   anio_cursada: "2025", genero: "",
-  c1: "0", c2: "0", c3: "0", c4: "0", c5: "0", c6: "0", c7: "0", c8: "0",
 };
 
-const initialEncuesta = Object.fromEntries([["alumno", ""], ...encuestaKeys.map((k) => [k, "0"])]);
-const initialNota = { alumno: "", asignatura: "", nota: "" };
-const initialExpediente = { alumno: "", nivel_preocupacion: "3", archivo_pdf: null };
+const initialEncuesta = Object.fromEntries([["alumno", ""], ["inasistencias", "0"], ...encuestaKeys.map((k) => [k, "0"])]);
+const initialNota = { alumno: "", bimestre: "1" };
 
 function socialToCondicion(maxSocial) {
   if (maxSocial <= 0) return "NINGUNA";
@@ -96,7 +107,7 @@ function socialToCondicion(maxSocial) {
 }
 
 async function req(path, options = {}) {
-  const res = await fetch(`${API}${path}`, options);
+  const res = await fetch(`${API}${path}`, { cache: "no-store", ...options });
   if (!res.ok) throw new Error(await res.text());
   if (res.status === 204) return null;
   return res.json();
@@ -187,6 +198,161 @@ function generarRecomendaciones(pred) {
   return recs.slice(0, 5);
 }
 
+/* ── Expediente (reporte descargable) ──────────────────────────────────── */
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+const _ESCALA_TXT = { 0: "Nunca", 1: "Algunas veces", 2: "Bastantes veces", 3: "Siempre" };
+
+function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
+  const fecha = new Date().toLocaleDateString("es-PE", { year: "numeric", month: "long", day: "numeric" });
+  const nombre = alumno ? `${alumno.nombre} ${alumno.apellido}` : "—";
+
+  // ── 1. Datos del alumno ──────────────────────────────────────────────────
+  const datosAlumno = alumno ? `
+    <table class="info">
+      <tr><td class="k">Nombre</td><td>${esc(nombre)}</td><td class="k">ID</td><td>${String(alumno.id).padStart(3, "0")}</td></tr>
+      <tr><td class="k">Grado</td><td>${esc(alumno.grado)}</td><td class="k">Edad</td><td>${esc(alumno.edad)}</td></tr>
+      <tr><td class="k">Género</td><td>${esc(alumno.genero)}</td><td class="k">Año de cursada</td><td>${esc(alumno.anio_cursada)}</td></tr>
+      <tr><td class="k">Contacto</td><td>${esc(alumno.contacto_emergente)}</td><td class="k">Condición social</td><td>${esc(alumno.condicion_social)}</td></tr>
+    </table>` : `<p class="muted">Datos del alumno no disponibles.</p>`;
+
+  // ── 2. Dashboard ─────────────────────────────────────────────────────────
+  let dashboardHTML;
+  if (pred) {
+    const riesgoColor = pred.nivel_riesgo === "Alto" ? "#ef4444" : pred.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e";
+    const tdahLevel = pred.nivel_tdah ?? "—";
+    const esTdah = tdahLevel === "Con TDAH" || tdahLevel === "Sospechoso de TDAH" || String(tdahLevel).startsWith("Posible");
+    const tdahColor = esTdah ? "#f97316" : "#22c55e";
+    const tdahProbPct = Math.round((pred.prob_tdah ?? 0) * 100);
+    const rendimiento = Math.round((pred.promedio_notas / 20) * 100);
+    const rendColor = rendimiento >= 75 ? "#22c55e" : rendimiento >= 50 ? "#f97316" : "#ef4444";
+    const factores = buildFactoresData(pred);
+    const recs = generarRecomendaciones(pred);
+
+    dashboardHTML = `
+      <div class="kpis">
+        <div class="kpi"><span class="kpi-l">Riesgo Académico</span><span class="kpi-v" style="color:${riesgoColor}">${esc(pred.nivel_riesgo)}</span><span class="kpi-s">Probabilidad: ${Math.round((pred.probabilidad ?? 0) * 100)}%</span></div>
+        <div class="kpi"><span class="kpi-l">Riesgo TDAH</span><span class="kpi-v" style="color:${tdahColor}">${esc(tdahLevel)}</span><span class="kpi-s">Probabilidad: ${tdahProbPct}%</span></div>
+        <div class="kpi"><span class="kpi-l">Rendimiento General</span><span class="kpi-v" style="color:${rendColor}">${rendimiento}/100</span><span class="kpi-s">Promedio ponderado</span></div>
+      </div>
+      <h3>Factores que influyen en el riesgo</h3>
+      <table class="bars">
+        ${factores.map((f) => `<tr><td class="bar-name">${esc(f.name)}</td><td class="bar-cell"><span class="bar" style="width:${f.valor}%"></span></td><td class="bar-val">${f.valor}%</td></tr>`).join("")}
+      </table>
+      <h3>Recomendaciones generadas</h3>
+      <ul class="recs">
+        ${recs.map((r) => `<li><span>${r.icon} ${esc(r.text)}</span><span class="tag tag-${r.priority}">${esc(r.priorityLabel)}</span></li>`).join("")}
+      </ul>`;
+  } else {
+    dashboardHTML = `<p class="muted">No hay predicción registrada. Genera una predicción para incluir el resumen del dashboard.</p>`;
+  }
+
+  // ── 3. Encuesta EDAH ─────────────────────────────────────────────────────
+  let encuestaHTML;
+  if (encuesta) {
+    const bloque = (titulo, keys, total, max) => `
+      <h3>${titulo} <span class="block-total">(${total}/${max})</span></h3>
+      <table class="enc">
+        <thead><tr><th>Ítem</th><th>Pregunta</th><th>Valor</th></tr></thead>
+        <tbody>${keys.map((k) => `<tr><td>${k}</td><td>${esc(encuestaLabels[k])}</td><td class="v">${encuesta[k]} – ${_ESCALA_TXT[encuesta[k]] ?? ""}</td></tr>`).join("")}</tbody>
+      </table>`;
+    const suma = (keys) => keys.reduce((s, k) => s + (encuesta[k] ?? 0), 0);
+    encuestaHTML =
+      bloque("Déficit de Atención (DA)", encuestaKeysDA, suma(encuestaKeysDA), 15) +
+      bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, suma(encuestaKeysHI), 15) +
+      bloque("Trastorno de Conducta (TC)", encuestaKeysTC, suma(encuestaKeysTC), 30) +
+      `<p class="inasist"><b>Inasistencias:</b> ${encuesta.inasistencias ?? 0} día(s)</p>`;
+  } else {
+    encuestaHTML = `<p class="muted">No hay encuesta registrada para este estudiante.</p>`;
+  }
+
+  // ── 4. Predicción ────────────────────────────────────────────────────────
+  let prediccionHTML;
+  if (pred) {
+    const interp = shap?.interpretacion
+      ? shap.interpretacion.split("\n\n").map((p) => `<p>${esc(p)}</p>`).join("")
+      : `<p class="muted">Sin interpretación disponible.</p>`;
+    const bimNota = (v) => (v && v !== "—") ? esc(v) : `<span class="muted">Sin registrar</span>`;
+    prediccionHTML = `
+      <table class="info">
+        <tr><td class="k">Nivel de Riesgo Académico</td><td>${esc(pred.nivel_riesgo)} (${Math.round((pred.probabilidad ?? 0) * 100)}%)</td></tr>
+        <tr><td class="k">Indicador TDAH</td><td>${esc(pred.nivel_tdah ?? "—")} (${Math.round((pred.prob_tdah ?? 0) * 100)}%)</td></tr>
+        <tr><td class="k">Atención (DA)</td><td>${pred.da_total ?? "—"}/15</td></tr>
+        <tr><td class="k">Hiperactividad (HI)</td><td>${pred.hi_total ?? "—"}/15</td></tr>
+        <tr><td class="k">Conducta (TC)</td><td>${pred.tc_total ?? "—"}/30</td></tr>
+        <tr><td class="k">Bimestre 1</td><td>${bimNota(pred.nota_b1)}</td></tr>
+        <tr><td class="k">Bimestre 2</td><td>${bimNota(pred.nota_b2)}</td></tr>
+        <tr><td class="k">Bimestre 3</td><td>${bimNota(pred.nota_b3)}</td></tr>
+        <tr><td class="k">Bimestre 4</td><td>${bimNota(pred.nota_b4)}</td></tr>
+        <tr><td class="k">Promedio Final</td><td>${esc(pred.promedio_final ?? pred.prediccion_notas ?? "—")} <span class="muted">(solo bimestres con nota)</span></td></tr>
+        <tr><td class="k">Fecha de predicción</td><td>${esc(pred.fecha_prediccion ?? "—")}</td></tr>
+      </table>
+      <h3>Interpretación (SHAP)</h3>
+      <div class="interp">${interp}</div>`;
+  } else {
+    prediccionHTML = `<p class="muted">No hay predicción registrada para este estudiante.</p>`;
+  }
+
+  const styles = `
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; margin: 0; padding: 32px 40px; font-size: 13px; line-height: 1.5; }
+    .doc-head { border-bottom: 3px solid #2563eb; padding-bottom: 12px; margin-bottom: 22px; }
+    .doc-head h1 { margin: 0; color: #1e3a5f; font-size: 24px; }
+    .doc-head .sub { margin: 4px 0 0; color: #64748b; font-size: 12px; }
+    section { margin-bottom: 22px; page-break-inside: avoid; }
+    h2 { font-size: 15px; color: #2563eb; border-left: 4px solid #2563eb; padding-left: 8px; margin: 0 0 10px; }
+    h3 { font-size: 13px; color: #334155; margin: 14px 0 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    table.info td { padding: 5px 8px; border: 1px solid #e2e8f0; }
+    table.info td.k { background: #f1f5f9; font-weight: 600; width: 18%; color: #475569; }
+    .muted { color: #94a3b8; font-style: italic; }
+    .kpis { display: flex; gap: 12px; margin: 8px 0 4px; }
+    .kpi { flex: 1; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; text-align: center; }
+    .kpi-l { display: block; font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: .03em; }
+    .kpi-v { display: block; font-size: 20px; font-weight: 700; margin: 4px 0; }
+    .kpi-s { display: block; font-size: 11px; color: #64748b; }
+    table.bars td { padding: 4px 6px; vertical-align: middle; }
+    .bar-name { width: 28%; font-size: 12px; }
+    .bar-cell { width: 60%; }
+    .bar { display: inline-block; height: 14px; background: #3b82f6; border-radius: 4px; min-width: 2px; }
+    .bar-val { width: 12%; text-align: right; font-weight: 600; font-size: 12px; }
+    ul.recs { list-style: none; padding: 0; margin: 0; }
+    ul.recs li { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px solid #e2e8f0; border-radius: 6px; padding: 7px 10px; margin-bottom: 6px; }
+    .tag { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+    .tag-alta { background: #fee2e2; color: #b91c1c; }
+    .tag-media { background: #fef3c7; color: #b45309; }
+    .tag-baja { background: #dcfce7; color: #15803d; }
+    table.enc { margin-bottom: 8px; }
+    table.enc th, table.enc td { border: 1px solid #e2e8f0; padding: 5px 8px; text-align: left; font-size: 12px; }
+    table.enc th { background: #f1f5f9; color: #475569; }
+    table.enc td.v { white-space: nowrap; font-weight: 600; }
+    .block-total { color: #2563eb; font-weight: 600; }
+    .inasist { margin: 8px 0 0; }
+    .interp p { margin: 0 0 8px; text-align: justify; }
+    .doc-foot { margin-top: 26px; border-top: 1px solid #e2e8f0; padding-top: 10px; color: #94a3b8; font-size: 11px; text-align: center; }
+    @media print { body { padding: 0; } @page { margin: 1.5cm; } }`;
+
+  return `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>Expediente_${esc(nombre.replace(/\s+/g, "_"))}</title>
+<style>${styles}</style>
+</head><body>
+  <header class="doc-head">
+    <h1>Expediente Psicológico</h1>
+    <p class="sub">Sistema de Predicción Educativa · Emitido el ${fecha}</p>
+  </header>
+  <section><h2>1. Datos del Estudiante</h2>${datosAlumno}</section>
+  <section><h2>2. Resumen del Dashboard</h2>${dashboardHTML}</section>
+  <section><h2>3. Encuesta Psicoeducativa (EDAH)</h2>${encuestaHTML}</section>
+  <section><h2>4. Predicción Académica</h2>${prediccionHTML}</section>
+  <footer class="doc-foot">Documento generado automáticamente — Sistema de Predicción Educativa</footer>
+  <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},350);});</script>
+</body></html>`;
+}
+
 /* ── App ───────────────────────────────────────────────────────────────── */
 
 export default function App() {
@@ -198,8 +364,14 @@ export default function App() {
   const [alumnoForm, setAlumnoForm] = useState(initialAlumno);
   const [encuestaForm, setEncuestaForm] = useState(initialEncuesta);
   const [notaForm, setNotaForm] = useState(initialNota);
-  const [expForm, setExpForm] = useState(initialExpediente);
+  const [notasAsig, setNotasAsig] = useState({});  // { asignatura: "AD"|"A"|"B"|"C"|"" }
+  const [expAlumno, setExpAlumno] = useState("");
   const [predAlumno, setPredAlumno] = useState("");
+  const [todosPredicciones, setTodosPredicciones] = useState([]);
+  const [listaVerAlumno, setListaVerAlumno] = useState(null);
+  const [listaEditAlumno, setListaEditAlumno] = useState(null);
+  const [listaEditForm, setListaEditForm] = useState({});
+  const [listaStatus, setListaStatus] = useState({ msg: "", error: false });
   const [predicciones, setPredicciones] = useState([]);
   const [alumnoFormError, setAlumnoFormError] = useState("");
   const [encuestaStatus, setEncuestaStatus] = useState({ msg: "", error: false });
@@ -212,6 +384,10 @@ export default function App() {
   // Dashboard states
   const [dashAlumno, setDashAlumno] = useState("");
   const [dashData, setDashData] = useState(null);
+  const [dashHistorial, setDashHistorial] = useState([]);
+  const [shapData, setShapData] = useState(null);
+  const [shapPredId, setShapPredId] = useState(null);
+  const [shapLoading, setShapLoading] = useState(false);
 
   const goToView = (v) => {
     setActiveView(v);
@@ -219,6 +395,10 @@ export default function App() {
     setAlumnoFormError("");
     setEncuestaStatus({ msg: "", error: false });
     setNotasStatus({ msg: "", error: false });
+    setListaStatus({ msg: "", error: false });
+    setListaVerAlumno(null);
+    setListaEditAlumno(null);
+    if (v === "lista") loadTodosPredicciones();
   };
 
   const alumnoOptions = useMemo(
@@ -237,13 +417,24 @@ export default function App() {
     setPredicciones(data);
   }
 
+  async function loadTodosPredicciones() {
+    try {
+      const data = await req("/predicciones/");
+      setTodosPredicciones(Array.isArray(data) ? data : []);
+    } catch {
+      setTodosPredicciones([]);
+    }
+  }
+
   async function loadDashData(alumnoId) {
-    if (!alumnoId) return setDashData(null);
+    if (!alumnoId) { setDashData(null); setDashHistorial([]); return; }
     try {
       const data = await req(`/predicciones/?alumno=${alumnoId}`);
       setDashData(data.length > 0 ? data[0] : null);
+      setDashHistorial(Array.isArray(data) ? data : []);
     } catch {
       setDashData(null);
+      setDashHistorial([]);
     }
   }
 
@@ -253,16 +444,30 @@ export default function App() {
     }
   }, [auth.logged]);
 
+  // Carga las notas del alumno seleccionado (sirve tanto al histórico como al
+  // formulario individual, que precarga la grilla del bimestre).
   useEffect(() => {
-    if (!auth.logged || activeView !== "notas" || notasModoLista !== "historico") return;
+    if (!auth.logged || activeView !== "notas") return;
     const id = notaForm.alumno;
     if (!id) { setHistoricoNotas([]); return; }
     let cancelled = false;
     req(`/notas/?alumno=${id}`)
       .then((data) => { if (!cancelled) { setHistoricoNotas(Array.isArray(data) ? data : []); setNotasStatus({ msg: "", error: false }); } })
-      .catch((err) => { if (!cancelled) { setHistoricoNotas([]); setNotasStatus({ msg: err.message || "Error al cargar el histórico de notas.", error: true }); } });
+      .catch((err) => { if (!cancelled) { setHistoricoNotas([]); setNotasStatus({ msg: err.message || "Error al cargar las notas.", error: true }); } });
     return () => { cancelled = true; };
-  }, [auth.logged, activeView, notasModoLista, notaForm.alumno]);
+  }, [auth.logged, activeView, notaForm.alumno]);
+
+  // Precarga la grilla de asignaturas con las notas ya guardadas del bimestre.
+  useEffect(() => {
+    if (activeView !== "notas" || notasModoLista !== "actuales" || notasModoCarga !== "individual") return;
+    const b = Number(notaForm.bimestre);
+    const map = {};
+    ASIGNATURAS_VALIDAS.forEach((a) => { map[a] = ""; });
+    historicoNotas
+      .filter((n) => Number(n.bimestre ?? 1) === b)
+      .forEach((n) => { map[n.asignatura] = n.calificacion_literal; });
+    setNotasAsig(map);
+  }, [historicoNotas, notaForm.bimestre, notasModoLista, notasModoCarga, activeView]);
 
   const notify = (msg, error = false) => setStatus({ msg, error });
 
@@ -279,12 +484,11 @@ export default function App() {
   const submitAlumno = async (e) => {
     e.preventDefault();
     setAlumnoFormError("");
-    const socialVals = ["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"].map((k) => Number(alumnoForm[k]));
     const body = {
       nombre: alumnoForm.nombre, apellido: alumnoForm.apellido,
       contacto_emergente: alumnoForm.contacto_emergente, edad: Number(alumnoForm.edad),
       grado: alumnoForm.grado, anio_cursada: Number(alumnoForm.anio_cursada),
-      condicion_social: socialToCondicion(Math.max(...socialVals)),
+      condicion_social: "NINGUNA",
       genero: alumnoForm.genero || "No especificado",
     };
     try {
@@ -300,7 +504,7 @@ export default function App() {
   const submitEncuesta = async (e) => {
     e.preventDefault();
     setEncuestaStatus({ msg: "", error: false });
-    const body = { alumno: Number(encuestaForm.alumno) };
+    const body = { alumno: Number(encuestaForm.alumno), inasistencias: Number(encuestaForm.inasistencias ?? 0) };
     encuestaKeys.forEach((k) => { body[k] = Number(encuestaForm[k]); });
     try {
       await req("/encuestas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -310,25 +514,56 @@ export default function App() {
     }
   };
 
+  // Recalcula el riesgo del alumno (auto-generar predicción). Devuelve un texto
+  // para mostrar, o un aviso si aún falta la encuesta EDAH.
+  const recalcularRiesgo = async (alumnoId) => {
+    try {
+      const pred = await req("/predicciones/generar/", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alumno: Number(alumnoId) }),
+      });
+      await loadDashData(alumnoId);
+      return ` Riesgo académico: ${pred.nivel_riesgo} (${Math.round((pred.probabilidad ?? 0) * 100)}%).`;
+    } catch {
+      return " (Para calcular el riesgo académico, registra primero la encuesta EDAH del estudiante.)";
+    }
+  };
+
   const submitNota = async (e) => {
     e.preventDefault();
     setNotasStatus({ msg: "", error: false });
-    const asignatura = notaForm.asignatura.trim();
-    if (!ASIGNATURAS_VALIDAS.includes(asignatura)) {
-      setNotasStatus({ msg: `Asignatura no válida. Use exactamente: ${ASIGNATURAS_VALIDAS.join(", ")}.`, error: true });
+    if (!notaForm.alumno) {
+      setNotasStatus({ msg: "Selecciona un estudiante.", error: true });
       return;
     }
-    const calificacion_literal = normalizarCalificacionLiteral(notaForm.nota);
-    if (!calificacion_literal) {
-      setNotasStatus({ msg: "La nota debe ser AD, A, B o C.", error: true });
+    const bimestre = Number(notaForm.bimestre ?? 1);
+    const entradas = ASIGNATURAS_VALIDAS
+      .map((a) => [a, normalizarCalificacionLiteral(notasAsig[a] || "")])
+      .filter(([, lit]) => lit);  // solo cursos con nota válida
+    if (entradas.length === 0) {
+      setNotasStatus({ msg: "Ingresa al menos una nota de curso (AD, A, B o C).", error: true });
       return;
     }
     try {
-      await req("/notas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alumno: Number(notaForm.alumno), asignatura, calificacion_literal }) });
-      setNotaForm({ ...notaForm, asignatura: "", nota: "" });
-      setNotasStatus({ msg: "Nota registrada correctamente.", error: false });
+      for (const [asignatura, calificacion_literal] of entradas) {
+        await req("/notas/", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ alumno: Number(notaForm.alumno), asignatura, calificacion_literal, bimestre }),
+        });
+      }
+      const prom = promedioLiteral(entradas.map(([, l]) => l));
+      // Refresca las notas del alumno (para histórico y grilla)
+      const data = await req(`/notas/?alumno=${notaForm.alumno}`).catch(() => []);
+      setHistoricoNotas(Array.isArray(data) ? data : []);
+      // Cálculo automático del riesgo
+      const riesgoMsg = await recalcularRiesgo(notaForm.alumno);
+      setNotasStatus({
+        msg: `Notas del Bimestre ${bimestre} guardadas (${entradas.length} curso(s)). `
+           + `Promedio del bimestre: ${prom.letra} (${prom.num}).${riesgoMsg}`,
+        error: false,
+      });
     } catch (err) {
-      setNotasStatus({ msg: err.message || "No se pudo registrar la nota.", error: true });
+      setNotasStatus({ msg: err.message || "No se pudieron registrar las notas.", error: true });
     }
   };
 
@@ -341,20 +576,25 @@ export default function App() {
     if (lines.length < 2) { setNotasStatus({ msg: "El CSV debe tener encabezado y al menos una fila de datos.", error: true }); return; }
     let ok = 0;
     const errores = [];
+    const alumnosTocados = new Set();
     for (let i = 1; i < lines.length; i++) {
       const partes = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-      const [alumnoId, asig, notaVal] = partes;
-      if (!alumnoId || !asig || notaVal === undefined) { errores.push(`Fila ${i + 1}: datos incompletos`); continue; }
-      if (!ASIGNATURAS_VALIDAS.includes(asig)) { errores.push(`Fila ${i + 1}: asignatura no válida`); continue; }
+      const [alumnoId, bimestreVal, asignaturaVal, notaVal] = partes;
+      if (!alumnoId || !bimestreVal || !asignaturaVal || notaVal === undefined) { errores.push(`Fila ${i + 1}: datos incompletos`); continue; }
+      const bimestreNum = Number(bimestreVal);
+      if (![1,2,3,4].includes(bimestreNum)) { errores.push(`Fila ${i + 1}: bimestre debe ser 1, 2, 3 o 4`); continue; }
       const lit = normalizarCalificacionLiteral(notaVal);
       if (!lit) { errores.push(`Fila ${i + 1}: calificación debe ser AD, A, B o C`); continue; }
       try {
-        await req("/notas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alumno: Number(alumnoId), asignatura: asig, calificacion_literal: lit }) });
+        await req("/notas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alumno: Number(alumnoId), asignatura: asignaturaVal, calificacion_literal: lit, bimestre: bimestreNum }) });
         ok += 1;
+        alumnosTocados.add(Number(alumnoId));
       } catch (err) { errores.push(`Fila ${i + 1}: ${err.message || "error"}`); }
     }
     setArchivoMasivo(null);
     await loadAlumnos();
+    // Cálculo automático del riesgo para cada alumno con notas cargadas
+    for (const id of alumnosTocados) { await recalcularRiesgo(id); }
     if (errores.length) {
       setNotasStatus({ msg: `Procesadas ${ok} filas. Errores: ${errores.slice(0, 5).join("; ")}${errores.length > 5 ? "…" : ""}`, error: ok === 0 });
     } else {
@@ -362,14 +602,27 @@ export default function App() {
     }
   };
 
-  const submitExpediente = async (e) => {
-    e.preventDefault();
-    const fd = new FormData();
-    fd.append("alumno", expForm.alumno);
-    fd.append("nivel_preocupacion", expForm.nivel_preocupacion);
-    if (expForm.archivo_pdf) fd.append("archivo_pdf", expForm.archivo_pdf);
-    await req("/expedientes/", { method: "POST", body: fd });
-    notify("Expediente guardado.");
+  const descargarExpediente = async () => {
+    if (!expAlumno) return notify("Selecciona un estudiante para descargar el expediente.", true);
+    try {
+      const alumno = alumnos.find((a) => String(a.id) === String(expAlumno)) ?? null;
+      const [encuestas, preds] = await Promise.all([
+        req(`/encuestas/?alumno=${expAlumno}`).catch(() => []),
+        req(`/predicciones/?alumno=${expAlumno}`).catch(() => []),
+      ]);
+      const encuesta = Array.isArray(encuestas) && encuestas.length ? encuestas[0] : null;
+      const pred = Array.isArray(preds) && preds.length ? preds[0] : null;
+      const shap = pred ? await req(`/predicciones/${pred.id}/shap/`).catch(() => null) : null;
+
+      const win = window.open("", "_blank");
+      if (!win) return notify("Permite las ventanas emergentes para descargar el expediente.", true);
+      win.document.open();
+      win.document.write(buildExpedienteHTML({ alumno, encuesta, pred, shap }));
+      win.document.close();
+      notify("Expediente generado. Usa «Guardar como PDF» en el diálogo de impresión.");
+    } catch (err) {
+      notify(err.message || "No se pudo generar el expediente.", true);
+    }
   };
 
   const generarPrediccion = async () => {
@@ -412,6 +665,7 @@ export default function App() {
   const navLabels = {
     dashboard:    { icon: "⊞", label: "Dashboard" },
     alumno:       { icon: "◎", label: "Registrar Alumno" },
+    lista:        { icon: "≡", label: "Lista de Alumnos" },
     encuesta:     { icon: "☰", label: "Encuesta" },
     predicciones: { icon: "↗", label: "Predicciones" },
     notas:        { icon: "✎", label: "Subir Notas" },
@@ -710,26 +964,179 @@ export default function App() {
                     <option value="Otro">Otro</option>
                   </select>
                 </div>
-                <div className="form-section full">
-                  <h3 className="form-section__title">Evaluación Social (0-3)</h3>
-                  <p className="form-legend">0: Ningún Problema | 1: Leve | 2: Moderado | 3: Grave</p>
-                  <div className="grid" style={{ marginTop: 8 }}>
-                    {["c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"].map((c) => (
-                      <div key={c} className="field-group">
-                        <label htmlFor={`alumno-${c}`}>{evalSocialLabels[c]}</label>
-                        <select id={`alumno-${c}`} value={alumnoForm[c]} onChange={(e) => setAlumnoForm({ ...alumnoForm, [c]: e.target.value })}>
-                          {socialSelectOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-                        </select>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+
                 {alumnoFormError && <div className="alert-error" role="alert">{alumnoFormError}</div>}
                 <button className="full" type="submit">Registrar Alumno</button>
               </form>
             </article>
           </>
         )}
+
+        {/* ── Lista de Alumnos ───────────────────────── */}
+        {activeView === "lista" && (() => {
+          const predsPorAlumno = {};
+          todosPredicciones.forEach((p) => { predsPorAlumno[p.alumno] = p; });
+
+          const estadoAlumno = (id) => {
+            const p = predsPorAlumno[id];
+            if (!p) return { label: "Registrado", color: "#64748b" };
+            if (p.nivel_riesgo) return { label: "Con Predicción", color: "#0093c4" };
+            return { label: "Evaluado", color: "#16a34a" };
+          };
+
+          const iniciarEdicion = (a) => {
+            setListaEditAlumno(a.id);
+            setListaEditForm({
+              nombre: a.nombre, apellido: a.apellido, edad: a.edad,
+              grado: a.grado, anio_cursada: a.anio_cursada,
+              contacto_emergente: a.contacto_emergente,
+              condicion_social: a.condicion_social ?? "NINGUNA",
+              genero: a.genero ?? "No especificado",
+            });
+          };
+
+          const guardarEdicion = async () => {
+            try {
+              await req(`/alumnos/${listaEditAlumno}/`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ ...listaEditForm, edad: Number(listaEditForm.edad), anio_cursada: Number(listaEditForm.anio_cursada) }),
+              });
+              await loadAlumnos();
+              setListaEditAlumno(null);
+              setListaStatus({ msg: "Alumno actualizado correctamente.", error: false });
+            } catch (err) {
+              setListaStatus({ msg: err.message || "Error al actualizar.", error: true });
+            }
+          };
+
+          const eliminarAlumno = async (id, nombre) => {
+            if (!window.confirm(`¿Eliminar a ${nombre}? Esta acción no se puede deshacer.`)) return;
+            try {
+              await req(`/alumnos/${id}/`, { method: "DELETE" });
+              await loadAlumnos();
+              await loadTodosPredicciones();
+              setListaStatus({ msg: "Alumno eliminado.", error: false });
+            } catch (err) {
+              setListaStatus({ msg: err.message || "Error al eliminar.", error: true });
+            }
+          };
+
+          return (
+            <div>
+              <h1 className="page-title">Lista de Alumnos</h1>
+              {listaStatus.msg && (
+                <div className={listaStatus.error ? "alert-error" : "alert-success"} style={{ marginBottom: 14 }}>
+                  {listaStatus.msg}
+                </div>
+              )}
+
+              {/* Modal Ver */}
+              {listaVerAlumno && (() => {
+                const a = alumnos.find((x) => x.id === listaVerAlumno);
+                const pred = predsPorAlumno[listaVerAlumno];
+                if (!a) return null;
+                return (
+                  <div className="lista-modal-overlay" onClick={() => setListaVerAlumno(null)}>
+                    <div className="lista-modal" onClick={(e) => e.stopPropagation()}>
+                      <h3 style={{ margin: "0 0 14px" }}>{a.nombre} {a.apellido}</h3>
+                      <p><b>ID:</b> {String(a.id).padStart(3, "0")}</p>
+                      <p><b>Grado:</b> {a.grado} &nbsp; <b>Edad:</b> {a.edad}</p>
+                      <p><b>Género:</b> {a.genero}</p>
+                      <p><b>Año:</b> {a.anio_cursada}</p>
+                      <p><b>Contacto:</b> {a.contacto_emergente}</p>
+                      <p><b>Condición social:</b> {a.condicion_social}</p>
+                      {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "#d62828" : pred.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {pred.nivel_tdah ?? "—"}</p></>}
+                      <button style={{ marginTop: 16 }} onClick={() => setListaVerAlumno(null)}>Cerrar</button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Modal Editar */}
+              {listaEditAlumno && (
+                <div className="lista-modal-overlay" onClick={() => setListaEditAlumno(null)}>
+                  <div className="lista-modal" onClick={(e) => e.stopPropagation()}>
+                    <h3 style={{ margin: "0 0 14px" }}>Editar Alumno</h3>
+                    <div className="grid" style={{ gap: 10 }}>
+                      {[["Nombre", "nombre"], ["Apellido", "apellido"], ["Edad", "edad"], ["Grado", "grado"], ["Año", "anio_cursada"], ["Contacto", "contacto_emergente"]].map(([lbl, key]) => (
+                        <div key={key} className="field-group">
+                          <label>{lbl}</label>
+                          <input value={listaEditForm[key] ?? ""} onChange={(e) => setListaEditForm({ ...listaEditForm, [key]: e.target.value })} />
+                        </div>
+                      ))}
+                      <div className="field-group">
+                        <label>Género</label>
+                        <select value={listaEditForm.genero} onChange={(e) => setListaEditForm({ ...listaEditForm, genero: e.target.value })}>
+                          <option value="Masculino">Masculino</option>
+                          <option value="Femenino">Femenino</option>
+                          <option value="Otro">Otro</option>
+                        </select>
+                      </div>
+                      <div className="field-group">
+                        <label>Condición Social</label>
+                        <select value={listaEditForm.condicion_social} onChange={(e) => setListaEditForm({ ...listaEditForm, condicion_social: e.target.value })}>
+                          <option value="NINGUNA">Ninguna</option>
+                          <option value="LEVE">Leve</option>
+                          <option value="MODERADA">Moderada</option>
+                          <option value="GRAVE">Grave</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                      <button onClick={guardarEdicion}>Guardar</button>
+                      <button className="danger" onClick={() => setListaEditAlumno(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <article className="panel" style={{ overflowX: "auto" }}>
+                {alumnos.length === 0 ? (
+                  <p style={{ color: "#64748b" }}>No hay alumnos registrados.</p>
+                ) : (
+                  <table className="lista-table">
+                    <thead>
+                      <tr>
+                        <th>ID</th>
+                        <th>Nombre</th>
+                        <th>Apellido</th>
+                        <th>Grado</th>
+                        <th>Edad</th>
+                        <th>Estado</th>
+                        <th>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {alumnos.map((a) => {
+                        const est = estadoAlumno(a.id);
+                        return (
+                          <tr key={a.id}>
+                            <td>{String(a.id).padStart(3, "0")}</td>
+                            <td>{a.nombre}</td>
+                            <td>{a.apellido}</td>
+                            <td>{a.grado}</td>
+                            <td>{a.edad}</td>
+                            <td><span className="lista-badge" style={{ background: est.color }}>{est.label}</span></td>
+                            <td>
+                              <div className="lista-actions">
+                                <button className="lista-btn lista-btn--ver" onClick={() => setListaVerAlumno(a.id)}>Ver</button>
+                                <button className="lista-btn lista-btn--edit" onClick={() => iniciarEdicion(a)}>Editar</button>
+                                <button className="lista-btn lista-btn--del" onClick={() => eliminarAlumno(a.id, `${a.nombre} ${a.apellido}`)}>Eliminar</button>
+                                <button className="lista-btn lista-btn--enc" onClick={() => { setEncuestaForm({ ...initialEncuesta, alumno: String(a.id) }); goToView("encuesta"); }}>Encuesta</button>
+                                <button className="lista-btn lista-btn--pred" onClick={() => { setPredAlumno(String(a.id)); loadPredicciones(a.id); goToView("predicciones"); }}>Predicción</button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </article>
+            </div>
+          );
+        })()}
 
         {/* ── Encuesta ───────────────────────────────── */}
         {activeView === "encuesta" && (
@@ -784,6 +1191,21 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+                {/* Inasistencias */}
+                <div className="form-section full encuesta-bloque">
+                  <h3 className="form-section__title">Inasistencias</h3>
+                  <p className="form-legend">Número de días de inasistencia del alumno en el período evaluado.</p>
+                  <div className="field-group" style={{ maxWidth: 260 }}>
+                    <label htmlFor="encuesta-inasistencias">Días de inasistencia</label>
+                    <input
+                      id="encuesta-inasistencias"
+                      type="number" min={0} max={200}
+                      value={encuestaForm.inasistencias ?? 0}
+                      onChange={(e) => setEncuestaForm({ ...encuestaForm, inasistencias: e.target.value })}
+                    />
+                  </div>
+                </div>
+
                 {encuestaStatus.msg && (
                   <div className={encuestaStatus.error ? "alert-error" : "alert-success"} role="status">
                     {encuestaStatus.msg}
@@ -813,29 +1235,69 @@ export default function App() {
               </select>
               <button type="button" onClick={generarPrediccion}>Generar Predicción</button>
             </div>
-            {predicciones.map((p) => (
-              <div key={p.id} className="card">
-                <strong>{p.alumno_nombre ?? "Alumno"}</strong><br />
-                <b>Nivel de Riesgo Académico:</b>{" "}
-                <span style={{ color: p.nivel_riesgo === "Alto" ? "#d62828" : p.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: "bold" }}>
-                  {p.nivel_riesgo}
-                </span>
-                {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
-                <b>Indicador TDAH:</b>{" "}
-                <span style={{ color: p.nivel_tdah === "Posible TDAH" ? "#d62828" : "#14732b", fontWeight: "bold" }}>
-                  {p.nivel_tdah ?? "—"}
-                </span><br />
-                {p.total_atencion != null && (
-                  <><b>Atención (DA):</b> {p.total_atencion}/15{"  "}<b>Hiperactividad (HI):</b> {p.total_hiperactividad}/15{"  "}{p.total_conducta != null && <><b>Conducta (TC):</b> {p.total_conducta}/30</>}<br /></>
-                )}
-                {p.prob_tdah != null && (
-                  <><b>Prob. TDAH:</b> {Math.round(p.prob_tdah * 100)}%<br /></>
-                )}
-                <b>Promedio de Notas:</b> {p.prediccion_notas}<br />
-                <b>Condiciones:</b> {p.condiciones_psicoeducativas}<br />
-                <small style={{ color: "#888" }}>{p.fecha_prediccion}</small>
-              </div>
-            ))}
+            {predicciones.map((p) => {
+              const isShapOpen = shapPredId === p.id;
+              const rColor = p.nivel_riesgo === "Alto" ? "#d62828" : p.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b";
+              return (
+                <div key={p.id} className="card">
+                  <strong>{p.alumno_nombre ?? "Alumno"}</strong><br />
+                  <b>Nivel de Riesgo Académico:</b>{" "}
+                  <span style={{ color: rColor, fontWeight: "bold" }}>{p.nivel_riesgo}</span>
+                  {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
+                  <b>Indicador TDAH:</b>{" "}
+                  <span style={{ color: p.nivel_tdah === "Posible TDAH" ? "#d62828" : "#14732b", fontWeight: "bold" }}>
+                    {p.nivel_tdah ?? "—"}
+                  </span><br />
+                  {p.total_atencion != null && (
+                    <><b>Atención (DA):</b> {p.total_atencion}/15{"  "}<b>Hiperactividad (HI):</b> {p.total_hiperactividad}/15{"  "}{p.total_conducta != null && <><b>Conducta (TC):</b> {p.total_conducta}/30</>}<br /></>
+                  )}
+                  {p.prob_tdah != null && (
+                    <><b>Prob. TDAH:</b> {Math.round(p.prob_tdah * 100)}%<br /></>
+                  )}
+                  <b>Promedio de Notas:</b> {p.prediccion_notas}<br />
+                  <b>Condiciones:</b> {p.condiciones_psicoeducativas}<br />
+                  <small style={{ color: "#888" }}>{p.fecha_prediccion}</small>
+
+                  {/* Botón SHAP */}
+                  <div style={{ marginTop: 10 }}>
+                    <button
+                      style={{ width: "auto", background: isShapOpen ? "#475569" : "#6366f1", padding: "6px 14px", fontSize: "0.82rem" }}
+                      onClick={async () => {
+                        if (isShapOpen) { setShapPredId(null); setShapData(null); return; }
+                        setShapLoading(true); setShapPredId(p.id); setShapData(null);
+                        try { const d = await req(`/predicciones/${p.id}/shap/`); setShapData(d); }
+                        catch { setShapData(null); }
+                        setShapLoading(false);
+                      }}
+                    >
+                      {isShapOpen ? "▲ Ocultar explicación SHAP" : "▼ Explicar con SHAP"}
+                    </button>
+                  </div>
+
+                  {/* Panel SHAP */}
+                  {isShapOpen && (
+                    <div style={{ marginTop: 12, padding: "16px 18px", background: "#f8faff", borderRadius: 8, border: "1px solid #dbe7f3" }}>
+                      {shapLoading ? (
+                        <span style={{ color: "#64748b", fontSize: "0.88rem" }}>Generando explicación...</span>
+                      ) : shapData?.interpretacion ? (
+                        <>
+                          <p style={{ margin: "0 0 10px", fontWeight: 700, color: "#1e3a5f", fontSize: "0.92rem", borderBottom: "1px solid #dbe7f3", paddingBottom: 8 }}>
+                            Explicación de la predicción
+                          </p>
+                          <div style={{ color: "#374151", fontSize: "0.88rem", lineHeight: 1.75 }}>
+                            {shapData.interpretacion.split("\n\n").map((para, i) => (
+                              <p key={i} style={{ margin: i < shapData.interpretacion.split("\n\n").length - 1 ? "0 0 10px" : 0 }}>{para}</p>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <span style={{ color: "#d62828", fontSize: "0.88rem" }}>No se pudo obtener la explicación.</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </article>
         )}
 
@@ -864,21 +1326,53 @@ export default function App() {
                     </select>
                   </div>
                   <div className="field-group full">
-                    <label htmlFor="nota-asignatura">Asignatura</label>
-                    <input id="nota-asignatura" type="text" placeholder="Ej. Matemática" value={notaForm.asignatura} onChange={(e) => setNotaForm({ ...notaForm, asignatura: e.target.value })} list="lista-asignaturas" required />
-                    <datalist id="lista-asignaturas">{ASIGNATURAS_VALIDAS.map((a) => <option key={a} value={a} />)}</datalist>
+                    <label htmlFor="nota-bimestre">Bimestre</label>
+                    <select id="nota-bimestre" value={notaForm.bimestre ?? "1"} onChange={(e) => setNotaForm({ ...notaForm, bimestre: e.target.value })} required>
+                      <option value="1">Bimestre 1</option>
+                      <option value="2">Bimestre 2</option>
+                      <option value="3">Bimestre 3</option>
+                      <option value="4">Bimestre 4</option>
+                    </select>
                   </div>
-                  <div className="field-group full">
-                    <label htmlFor="nota-calif">Nota</label>
-                    <input id="nota-calif" type="text" placeholder="AD, A, B o C" value={notaForm.nota} onChange={(e) => setNotaForm({ ...notaForm, nota: e.target.value })} required />
+                  <p className="form-legend full">
+                    Ingresa la nota de cada curso (AD, A, B o C). El sistema calcula automáticamente
+                    el promedio del bimestre y el riesgo académico. Deja en «—» los cursos sin nota.
+                  </p>
+                  <div className="full" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12 }}>
+                    {ASIGNATURAS_VALIDAS.map((a) => (
+                      <div key={a} className="field-group">
+                        <label htmlFor={`nota-asig-${a}`}>{a}</label>
+                        <select
+                          id={`nota-asig-${a}`}
+                          value={notasAsig[a] ?? ""}
+                          onChange={(e) => setNotasAsig({ ...notasAsig, [a]: e.target.value })}
+                        >
+                          <option value="">—</option>
+                          <option value="AD">AD</option>
+                          <option value="A">A</option>
+                          <option value="B">B</option>
+                          <option value="C">C</option>
+                        </select>
+                      </div>
+                    ))}
                   </div>
+                  {(() => {
+                    const prev = promedioLiteral(ASIGNATURAS_VALIDAS.map((a) => notasAsig[a]));
+                    return (
+                      <div className="full" style={{ padding: "10px 14px", background: "#f1f5f9", borderRadius: 8, fontSize: "0.92rem" }}>
+                        <b>Promedio del bimestre (vista previa):</b>{" "}
+                        {prev ? <span style={{ fontWeight: 700, color: "#1e3a5f" }}>{prev.letra} ({prev.num})</span>
+                              : <span style={{ color: "#94a3b8" }}>sin notas ingresadas</span>}
+                      </div>
+                    );
+                  })()}
                   {notasStatus.msg && <div className={notasStatus.error ? "alert-error" : "alert-success"} role="status">{notasStatus.msg}</div>}
-                  <button className="full" type="submit">Actualizar Nota</button>
+                  <button className="full" type="submit">Guardar notas del bimestre</button>
                 </form>
               )}
               {notasModoLista === "actuales" && notasModoCarga === "masiva" && (
                 <form className="grid notas-form" onSubmit={submitMasivaCsv}>
-                  <p className="form-legend full">CSV con encabezado: <strong>alumno_id,asignatura,calificacion</strong> (calificacion: AD, A, B o C; asignatura exacta como en el sistema). Excel: exporta a CSV antes de subir.</p>
+                  <p className="form-legend full">CSV con encabezado: <strong>alumno_id,bimestre,asignatura,calificacion</strong> (bimestre: 1-4; asignatura: nombre del curso; calificacion: AD, A, B o C). Excel: exporta a CSV antes de subir.</p>
                   <input className="full" type="file" accept=".csv,text/csv" onChange={(e) => setArchivoMasivo(e.target.files?.[0] ?? null)} />
                   {notasStatus.msg && <div className={notasStatus.error ? "alert-error" : "alert-success"} role="status">{notasStatus.msg}</div>}
                   <button className="full" type="submit">Procesar archivo</button>
@@ -896,37 +1390,63 @@ export default function App() {
                   {notasStatus.msg && <div className={notasStatus.error ? "alert-error" : "alert-success"} role="status">{notasStatus.msg}</div>}
                   {!notaForm.alumno && <p className="form-legend full">Selecciona un estudiante para ver su histórico.</p>}
                   {notaForm.alumno && historicoNotas.length === 0 && !notasStatus.error && <p className="form-legend full">No hay notas registradas para este estudiante.</p>}
-                  {historicoNotas.map((n) => (
-                    <div key={n.id} className="card full">
-                      <strong>{n.asignatura}</strong>{" — "}Calificación: <strong>{n.calificacion_literal}</strong>
-                      {n.fecha_registro && <>{" · "}Fecha: {n.fecha_registro}</>}
-                    </div>
-                  ))}
+                  {notaForm.alumno && historicoNotas.length > 0 && (() => {
+                    const porBim = { 1: [], 2: [], 3: [], 4: [] };
+                    historicoNotas.forEach((n) => { (porBim[n.bimestre ?? 1] ?? porBim[1]).push(n); });
+                    const bimestres = [1, 2, 3, 4].filter((b) => porBim[b].length);
+                    const promGeneral = promedioLiteral(historicoNotas.map((n) => n.calificacion_literal));
+                    return (
+                      <>
+                        {bimestres.map((b) => {
+                          const prom = promedioLiteral(porBim[b].map((n) => n.calificacion_literal));
+                          return (
+                            <div key={b} className="card full">
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                                <strong>Bimestre {b}</strong>
+                                <span>Promedio: <b style={{ color: "#1e3a5f" }}>{prom.letra} ({prom.num})</b></span>
+                              </div>
+                              <table className="lista-table" style={{ width: "100%" }}>
+                                <thead><tr><th>Curso</th><th>Nota</th></tr></thead>
+                                <tbody>
+                                  {porBim[b].map((n) => (
+                                    <tr key={n.id}><td>{n.asignatura}</td><td><b>{n.calificacion_literal}</b></td></tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          );
+                        })}
+                        <div className="card full" style={{ background: "#eef2ff", borderColor: "#c7d2fe" }}>
+                          <strong>Promedio general:</strong>{" "}
+                          <b style={{ color: "#1e3a5f", fontSize: "1.05rem" }}>{promGeneral.letra} ({promGeneral.num})</b>
+                          <span style={{ color: "#64748b" }}> · promedio de todos los cursos y bimestres registrados</span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </article>
           </div>
         )}
 
-        {/* ── Expediente ─────────────────────────────── */}
+        {/* ── Expediente (descarga) ──────────────────── */}
         {activeView === "expediente" && (
           <article className="panel">
             <h2>Expediente Psicológico</h2>
-            <form className="grid" onSubmit={submitExpediente}>
-              <select className="full" value={expForm.alumno} onChange={(e) => setExpForm({ ...expForm, alumno: e.target.value })} required>
-                <option value="">-- Selecciona --</option>
+            <p style={{ color: "#64748b", marginTop: 0 }}>
+              Genera y descarga el expediente del estudiante en PDF. Incluye el resumen del
+              dashboard, la encuesta psicoeducativa (EDAH) y la predicción académica.
+            </p>
+            <div className="grid">
+              <select className="full" value={expAlumno} onChange={(e) => setExpAlumno(e.target.value)}>
+                <option value="">-- Selecciona un estudiante --</option>
                 {alumnoOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
-              <select className="full" value={expForm.nivel_preocupacion} onChange={(e) => setExpForm({ ...expForm, nivel_preocupacion: e.target.value })} required>
-                <option value="1">1 - Muy baja preocupación</option>
-                <option value="2">2 - Preocupación leve</option>
-                <option value="3">3 - Preocupación moderada</option>
-                <option value="4">4 - Preocupación alta</option>
-                <option value="5">5 - Preocupación crítica</option>
-              </select>
-              <input className="full" type="file" accept="application/pdf" onChange={(e) => setExpForm({ ...expForm, archivo_pdf: e.target.files?.[0] ?? null })} required />
-              <button className="full" type="submit">Guardar Expediente</button>
-            </form>
+              <button className="full" type="button" onClick={descargarExpediente}>
+                ⬇ Descargar Expediente
+              </button>
+            </div>
           </article>
         )}
 

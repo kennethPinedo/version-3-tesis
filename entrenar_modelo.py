@@ -1,243 +1,233 @@
-"""
-Reentrenamiento mejorado del modelo XGBoost.
-Estrategia:
-  1. Class weights balanceados (principal mejora para recall de Alto)
-  2. SMOTE oversampling sobre clase minoritaria
-  3. RandomizedSearchCV para hiperparametros optimos (metrica: f1_macro)
-  4. Comparacion completa antes/despues
-  5. Guarda el mejor modelo sobre modelo_xgb.pkl
-"""
-import os, warnings, time
-warnings.filterwarnings("ignore")
-
+import os
 import joblib
-import numpy as np
 import pandas as pd
-from sklearn.metrics import (
-    accuracy_score, classification_report, confusion_matrix,
-    roc_auc_score, cohen_kappa_score, f1_score
-)
-from sklearn.utils.class_weight import compute_sample_weight
-from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold
+import numpy as np
 from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split, StratifiedKFold
+from sklearn.metrics import (classification_report, accuracy_score,
+                             confusion_matrix, recall_score, precision_score, f1_score)
+from sklearn.utils.class_weight import compute_sample_weight
+import matplotlib
+matplotlib.use("Agg")  # sin ventana gráfica
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-BASE        = os.path.dirname(__file__)
-MODELO_PATH = os.path.join(BASE, "backend_fastapi", "alumnos", "ml", "modelo_xgb.pkl")
-TRAIN_CSV   = os.path.join(BASE, "dataset", "output", "train.csv")
-VAL_CSV     = os.path.join(BASE, "dataset", "output", "val.csv")
-TEST_CSV    = os.path.join(BASE, "dataset", "output", "test.csv")
+# ==============================================================================
+# 1. CARGA Y PREPARACIÓN
+# ==============================================================================
+BASE = os.path.dirname(__file__)
+df = pd.read_csv(os.path.join(BASE, "dataset_tdah_bimestral_500.csv"))
 
-FEATURES = ["DA_total", "HI_total", "promedio_notas", "condicion_social"]
-TARGET   = "nivel_riesgo_academico"
-STR2INT  = {"Bajo": 0, "Medio": 1, "Alto": 2}
-INT2STR  = {0: "Bajo", 1: "Medio", 2: "Alto"}
-CLASES   = ["Bajo", "Medio", "Alto"]
+columnas_omitir = [
+    "ID_Alumno",
+    "Nota_B1", "Nota_B2", "Nota_B3", "Nota_B4", "Promedio_Final",
+    "Estado_TDAH",
+]
+X = df.drop(columns=columnas_omitir)
+y = df["Estado_TDAH"]
 
-# ── Cargar datos ──────────────────────────────────────────────────────────────
-train = pd.read_csv(TRAIN_CSV)
-val   = pd.read_csv(VAL_CSV)
-test  = pd.read_csv(TEST_CSV)
+FEATURE_NAMES = list(X.columns)  # 26 features
+print(f"Features ({len(FEATURE_NAMES)}): {FEATURE_NAMES}")
+print(f"Distribución target:\n{y.value_counts().sort_index()}\n")
 
-# Combinar train+val para búsqueda de hiperparámetros
-trainval = pd.concat([train, val], ignore_index=True)
+# ==============================================================================
+# 2. SEPARACIÓN ESTRATIFICADA 80 / 20 (train / val)
+# ==============================================================================
+X_train, X_val, y_train, y_val = train_test_split(
+    X, y, test_size=0.20, random_state=42, stratify=y
+)
 
-def prep(df):
-    X = df[FEATURES].values
-    y = df[TARGET].map(STR2INT).values
-    return X, y
+print(f"Train: {len(X_train)}  Val: {len(X_val)}")
 
-X_tr, y_tr   = prep(train)
-X_va, y_va   = prep(val)
-X_te, y_te   = prep(test)
-X_tv, y_tv   = prep(trainval)
+# ==============================================================================
+# 3. ENTRENAMIENTO XGBOOST
+# ==============================================================================
+# Pesos por clase orientados a la DETECCIÓN de TDAH. Se da más peso a las clases
+# de TDAH —y en especial a "Con TDAH"— que a "Sin TDAH". Esto prioriza la
+# sensibilidad (recall): capturar el máximo de casos reales de TDAH, aceptando un
+# leve aumento de falsos positivos, que en un cribado clínico es preferible a
+# dejar pasar un caso real.
+CLASS_WEIGHT = {0: 1.0, 1: 1.3, 2: 2.0}
+sample_weight = compute_sample_weight(class_weight=CLASS_WEIGHT, y=y_train)
+print(f"Pesos por clase: {CLASS_WEIGHT}")
 
-SEP = "=" * 64
+modelo = XGBClassifier(
+    objective="multi:softprob",
+    num_class=3,
+    n_estimators=800,
+    learning_rate=0.03,   # paso pequeño → aprende despacio, generaliza mejor
+    max_depth=2,          # árboles muy poco profundos → mínima memorización
+    subsample=0.7,        # más aleatoriedad en muestras → menos sobreajuste
+    colsample_bytree=0.7, # más aleatoriedad en features → menos sobreajuste
+    min_child_weight=8,   # exige muchas muestras por hoja → reglas más generales
+    gamma=0.3,            # solo divide si reduce la pérdida de forma clara
+    reg_alpha=0.5,        # regularización L1
+    reg_lambda=4.0,       # regularización L2 fuerte
+    max_delta_step=1,     # estabiliza la actualización con clases desbalanceadas
+    eval_metric="mlogloss",
+    early_stopping_rounds=50,
+    random_state=7,
+)
 
-# ── Modelo actual (baseline) ──────────────────────────────────────────────────
-_baseline_disponible = os.path.exists(MODELO_PATH)
-if _baseline_disponible:
-    try:
-        modelo_viejo = joblib.load(MODELO_PATH)
-        # Verificar compatibilidad de features
-        _ = modelo_viejo.predict(X_te[:1])
-    except Exception:
-        _baseline_disponible = False
+modelo.fit(
+    X_train, y_train,
+    sample_weight=sample_weight,
+    eval_set=[(X_val, y_val)],
+    verbose=False,
+)
 
+print(f"Mejor iteración: {modelo.best_iteration}")
 
-def evaluar(modelo, X, y, nombre=""):
-    yp    = modelo.predict(X)
-    prob  = modelo.predict_proba(X)
-    acc   = accuracy_score(y, yp)
-    f1m   = f1_score(y, yp, average="macro")
-    auc   = roc_auc_score(y, prob, multi_class="ovr", average="macro")
-    kap   = cohen_kappa_score(y, yp)
-    yp_s  = [INT2STR[i] for i in yp]
-    y_s   = [INT2STR[i] for i in y]
-    f1_per = f1_score(y_s, yp_s, labels=CLASES, average=None)
-    return {"acc": acc, "f1_macro": f1m, "auc": auc, "kappa": kap,
-            "f1_bajo": f1_per[0], "f1_medio": f1_per[1], "f1_alto": f1_per[2],
-            "yp": yp, "yp_s": yp_s, "y_s": y_s}
+# ==============================================================================
+# 4. EVALUACIÓN
+# ==============================================================================
+acc_tr = accuracy_score(y_train, modelo.predict(X_train))
+acc_va = accuracy_score(y_val,   modelo.predict(X_val))
 
+print(f"\nAccuracy  Train: {acc_tr:.4f}  Val: {acc_va:.4f}  (brecha: {acc_tr - acc_va:.4f})")
+print("\n--- Reporte en Validación ---")
+print(classification_report(
+    y_val, modelo.predict(X_val),
+    target_names=["Sin TDAH", "Sospechoso", "Con TDAH"],
+))
 
-print(f"\n{SEP}")
-print("  FASE 1: Metricas del modelo ACTUAL (baseline)")
-print(SEP)
+print("Importancia de features (gain):")
+for feat, imp in sorted(zip(FEATURE_NAMES, modelo.feature_importances_), key=lambda x: -x[1]):
+    print(f"  {feat:<25} {imp:.4f}")
 
-if _baseline_disponible:
-    m_old = evaluar(modelo_viejo, X_te, y_te)
-    print(f"\n  Accuracy   : {m_old['acc']:.4f}")
-    print(f"  F1 macro   : {m_old['f1_macro']:.4f}")
-    print(f"  AUC-ROC    : {m_old['auc']:.4f}")
-    print(f"  Kappa      : {m_old['kappa']:.4f}")
-    print(f"  F1 Bajo    : {m_old['f1_bajo']:.4f}")
-    print(f"  F1 Medio   : {m_old['f1_medio']:.4f}")
-    print(f"  F1 Alto    : {m_old['f1_alto']:.4f}")
-else:
-    m_old = None
-    print("\n  (Sin modelo previo — se omite baseline)")
+# ==============================================================================
+# 5. SENSIBILIDAD Y MÉTRICAS POR CLASE — TRAIN vs VAL
+# ==============================================================================
+# Comparar Train con Val por clase permite ver el sobreajuste de un vistazo: si
+# las barras de Train y Val quedan cercanas, el modelo generaliza (no memoriza).
+CLASES = ["Sin TDAH", "Sospechoso", "Con TDAH"]
 
-# ── Distribución y pesos ──────────────────────────────────────────────────────
-print(f"\n{SEP}")
-print("  FASE 2: Calculo de class weights balanceados")
-print(SEP)
+y_pred_train = modelo.predict(X_train)
+y_pred_val   = modelo.predict(X_val)
 
-# Calcular pesos para train+val (para la búsqueda) y solo train (para modelo final)
-w_tv = compute_sample_weight("balanced", y_tv)
-w_tr = compute_sample_weight("balanced", y_tr)
+def metricas_por_clase(y_true, y_pred, nombre_conjunto):
+    sens  = recall_score(y_true, y_pred, average=None, labels=[0,1,2])
+    prec  = precision_score(y_true, y_pred, average=None, labels=[0,1,2], zero_division=0)
+    f1    = f1_score(y_true, y_pred, average=None, labels=[0,1,2])
+    # Especificidad: TN/(TN+FP) por clase (one-vs-rest)
+    cm_c  = confusion_matrix(y_true, y_pred, labels=[0,1,2])
+    esp   = []
+    for i in range(3):
+        tn = cm_c.sum() - (cm_c[i,:].sum() + cm_c[:,i].sum() - cm_c[i,i])
+        fp = cm_c[:,i].sum() - cm_c[i,i]
+        esp.append(tn / (tn + fp) if (tn + fp) > 0 else 0.0)
+    rows = []
+    for j, cls in enumerate(CLASES):
+        rows.append({
+            "Conjunto":      nombre_conjunto,
+            "Clase":         cls,
+            "Sensibilidad":  round(sens[j], 4),
+            "Especificidad": round(esp[j],  4),
+            "Precisión":     round(prec[j], 4),
+            "F1-Score":      round(f1[j],   4),
+        })
+    return rows
 
-unique, counts = np.unique(y_tr, return_counts=True)
-for u, c in zip(unique, counts):
-    w = w_tr[y_tr == u][0]
-    print(f"  Clase {INT2STR[u]:<6}: {c:>4} samples  weight={w:.4f}")
+filas  = metricas_por_clase(y_train, y_pred_train, "Train")
+filas += metricas_por_clase(y_val,   y_pred_val,   "Val")
 
-# ── Busqueda de hiperparámetros ───────────────────────────────────────────────
-print(f"\n{SEP}")
-print("  FASE 3: RandomizedSearchCV (metrica: f1_macro)")
-print(SEP)
+df_met = pd.DataFrame(filas)
+print("\n--- Sensibilidad y métricas por clase (Train vs Val) ---")
+print(df_met.to_string(index=False))
 
-param_dist = {
-    "n_estimators":      [200, 300, 400, 500],
-    "max_depth":         [4, 5, 6, 7, 8],
-    "learning_rate":     [0.01, 0.05, 0.1, 0.15, 0.2],
-    "subsample":         [0.7, 0.8, 0.9, 1.0],
-    "colsample_bytree":  [0.7, 0.8, 0.9, 1.0],
-    "min_child_weight":  [1, 2, 3, 5],
-    "gamma":             [0, 0.1, 0.2, 0.3],
-    "reg_alpha":         [0, 0.01, 0.1, 1.0],
-    "reg_lambda":        [0.5, 1.0, 2.0, 5.0],
-}
+# ── Gráfica de sensibilidad por clase: Train vs Val ──────────────────────────
+fig, axes = plt.subplots(1, 3, figsize=(14, 5), sharey=True)
+colores = {"Train": "#4C72B0", "Val": "#DD8452"}
+
+for ax, cls in zip(axes, CLASES):
+    sub = df_met[df_met["Clase"] == cls]
+    conjuntos = sub["Conjunto"].tolist()
+    sensibilidades = sub["Sensibilidad"].tolist()
+    bars = ax.bar(conjuntos, sensibilidades,
+                  color=[colores[c] for c in conjuntos],
+                  width=0.5, edgecolor="white", linewidth=1.2)
+    for bar, val in zip(bars, sensibilidades):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                f"{val:.1%}", ha="center", va="bottom", fontsize=10, fontweight="bold")
+    ax.set_title(cls, fontsize=12, fontweight="bold")
+    ax.set_ylim(0, 1.15)
+    ax.set_ylabel("Sensibilidad (Recall)" if ax == axes[0] else "")
+    ax.set_xlabel("Conjunto")
+    ax.axhline(y=0.8, color="red", linestyle="--", linewidth=0.8, alpha=0.6)
+    ax.grid(axis="y", alpha=0.3)
+
+fig.suptitle("Sensibilidad por Clase — Train vs Val (XGBoost TDAH)", fontsize=13, fontweight="bold", y=1.02)
+plt.tight_layout()
+
+sens_path = os.path.join(BASE, "sensibilidad_clases.png")
+fig.savefig(sens_path, dpi=150, bbox_inches="tight")
+plt.close(fig)
+print(f"\nGráfica sensibilidad guardada en: {sens_path}")
+
+# ==============================================================================
+# 6. MATRIZ DE CONFUSIÓN — TRAIN vs VAL
+# ==============================================================================
+cm_train = confusion_matrix(y_train, y_pred_train, labels=[0, 1, 2])
+cm_val   = confusion_matrix(y_val,   y_pred_val,   labels=[0, 1, 2])
+
+print("\n--- Matriz de Confusión (Train) ---")
+print(pd.DataFrame(cm_train, index=[f"Real: {c}" for c in CLASES],
+                   columns=[f"Pred: {c}" for c in CLASES]).to_string())
+print("\n--- Matriz de Confusión (Val) ---")
+print(pd.DataFrame(cm_val, index=[f"Real: {c}" for c in CLASES],
+                   columns=[f"Pred: {c}" for c in CLASES]).to_string())
+
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+for ax, cm_, titulo in zip(axes, [cm_train, cm_val], ["Train", "Validación"]):
+    sns.heatmap(cm_, annot=True, fmt="d", cmap="Blues",
+                xticklabels=CLASES, yticklabels=CLASES,
+                linewidths=0.5, ax=ax, cbar=False)
+    ax.set_title(f"Matriz de Confusión — {titulo}", fontsize=12, fontweight="bold", pad=10)
+    ax.set_ylabel("Clase Real", fontsize=10)
+    ax.set_xlabel("Clase Predicha", fontsize=10)
+plt.tight_layout()
+
+img_path = os.path.join(BASE, "matriz_confusion.png")
+fig.savefig(img_path, dpi=150, bbox_inches="tight")
+plt.close(fig)
+print(f"\nImagen matriz guardada en: {img_path}")
+
+# ==============================================================================
+# 7. VALIDACIÓN CRUZADA ESTRATIFICADA (chequeo de robustez en consola)
+# ==============================================================================
+# Comprobación adicional de que no hay sobreajuste: el mismo modelo se reentrena
+# en 5 particiones y se mide en datos no vistos. Si el rendimiento es estable y
+# cercano al de Train, confirma que generaliza. (Solo consola, no genera PNG.)
+print("\n" + "=" * 78)
+print("VALIDACIÓN CRUZADA ESTRATIFICADA (5 folds)")
+print("=" * 78)
 
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+cv_params = modelo.get_params()
+cv_params.pop("early_stopping_rounds", None)
+cv_params["n_estimators"] = int(modelo.best_iteration) + 1
 
-base_xgb = XGBClassifier(
-    objective="multi:softprob",
-    num_class=3,
-    eval_metric="mlogloss",
-    use_label_encoder=False,
-    random_state=42,
-    tree_method="hist",
-    n_jobs=-1,
-)
+accs = []
+rec_por_clase = {0: [], 1: [], 2: []}
+for tr_idx, te_idx in cv.split(X, y):
+    X_tr, X_te = X.iloc[tr_idx], X.iloc[te_idx]
+    y_tr, y_te = y.iloc[tr_idx], y.iloc[te_idx]
+    sw = compute_sample_weight(class_weight=CLASS_WEIGHT, y=y_tr)
+    mcv = XGBClassifier(**cv_params)
+    mcv.fit(X_tr, y_tr, sample_weight=sw, verbose=False)
+    pred = mcv.predict(X_te)
+    accs.append(accuracy_score(y_te, pred))
+    rec = recall_score(y_te, pred, average=None, labels=[0, 1, 2])
+    for c in (0, 1, 2):
+        rec_por_clase[c].append(rec[c])
 
-search = RandomizedSearchCV(
-    base_xgb,
-    param_distributions=param_dist,
-    n_iter=60,
-    scoring="f1_macro",
-    cv=cv,
-    refit=True,
-    random_state=42,
-    n_jobs=-1,
-    verbose=1,
-)
+print(f"Accuracy           CV: {np.mean(accs):.4f} ± {np.std(accs):.4f}")
+for c, nombre in zip((0, 1, 2), CLASES):
+    print(f"Recall {nombre:<11} CV: {np.mean(rec_por_clase[c]):.4f} ± {np.std(rec_por_clase[c]):.4f}")
 
-print("\n  Iniciando busqueda (60 iteraciones x 5-fold CV)...")
-t0 = time.time()
-search.fit(X_tv, y_tv, sample_weight=w_tv)
-print(f"  Completado en {time.time()-t0:.1f}s")
-print(f"\n  Mejores parametros:")
-for k, v in search.best_params_.items():
-    print(f"    {k:<22}: {v}")
-print(f"\n  Mejor F1-macro en CV: {search.best_score_:.4f}")
-
-# ── Entrenar modelo final con los mejores parametros ─────────────────────────
-print(f"\n{SEP}")
-print("  FASE 4: Entrenamiento final (train+val, class weights)")
-print(SEP)
-
-best_params = search.best_params_.copy()
-modelo_nuevo = XGBClassifier(
-    **best_params,
-    objective="multi:softprob",
-    num_class=3,
-    eval_metric="mlogloss",
-    use_label_encoder=False,
-    random_state=42,
-    tree_method="hist",
-    n_jobs=-1,
-)
-
-modelo_nuevo.fit(X_tv, y_tv, sample_weight=w_tv)
-print("  Modelo entrenado.")
-
-# ── Evaluacion comparativa ────────────────────────────────────────────────────
-print(f"\n{SEP}")
-print(f"  FASE 5: Comparacion ANTES vs DESPUES (Test set, n={len(X_te)})")
-print(SEP)
-
-m_new = evaluar(modelo_nuevo, X_te, y_te)
-
-def delta(v_new, v_old):
-    d = v_new - v_old
-    return f"{d:+.4f}"
-
-if m_old is not None:
-    print(f"\n  {'Metrica':<22} {'Antes':>8}  {'Despues':>8}  {'Cambio':>10}")
-    print(f"  {'-'*54}")
-    filas = [
-        ("Accuracy",   m_old["acc"],      m_new["acc"]),
-        ("F1 macro",   m_old["f1_macro"], m_new["f1_macro"]),
-        ("AUC-ROC",    m_old["auc"],      m_new["auc"]),
-        ("Kappa",      m_old["kappa"],    m_new["kappa"]),
-        ("F1 - Bajo",  m_old["f1_bajo"],  m_new["f1_bajo"]),
-        ("F1 - Medio", m_old["f1_medio"], m_new["f1_medio"]),
-        ("F1 - Alto",  m_old["f1_alto"],  m_new["f1_alto"]),
-    ]
-    for nombre, vo, vn in filas:
-        print(f"  {nombre:<22} {vo:>8.4f}  {vn:>8.4f}  {delta(vn, vo):>10}")
-else:
-    print(f"\n  Accuracy : {m_new['acc']:.4f}")
-    print(f"  F1 macro : {m_new['f1_macro']:.4f}")
-    print(f"  AUC-ROC  : {m_new['auc']:.4f}")
-    print(f"  Kappa    : {m_new['kappa']:.4f}")
-    print(f"  F1 Bajo  : {m_new['f1_bajo']:.4f}")
-    print(f"  F1 Medio : {m_new['f1_medio']:.4f}")
-    print(f"  F1 Alto  : {m_new['f1_alto']:.4f}")
-
-print(f"\n  Reporte completo por clase (nuevo modelo):")
-print(f"  {'-'*58}")
-print(classification_report(m_new["y_s"], m_new["yp_s"], labels=CLASES, target_names=CLASES, digits=4))
-
-print(f"  Matriz de Confusion (nuevo modelo):")
-cm = confusion_matrix(m_new["y_s"], m_new["yp_s"], labels=CLASES)
-print("  " + " " * 12 + "".join(f"  Pred {c:<6}" for c in CLASES))
-for i, c in enumerate(CLASES):
-    print(f"  Real {c:<8}" + "".join(f"  {cm[i,j]:>11}" for j in range(3)))
-
-# ── Guardar modelo ────────────────────────────────────────────────────────────
-print(f"\n{SEP}")
-print("  FASE 6: Guardando modelo mejorado")
-print(SEP)
-
-joblib.dump(modelo_nuevo, MODELO_PATH)
-print(f"\n  Modelo guardado en: {MODELO_PATH}")
-print(f"\n  Resumen final:")
-if m_old is not None:
-    print(f"    F1 Alto:  {m_old['f1_alto']:.4f}  ->  {m_new['f1_alto']:.4f}  ({(m_new['f1_alto']-m_old['f1_alto'])*100:+.1f} puntos)")
-    print(f"    F1 macro: {m_old['f1_macro']:.4f}  ->  {m_new['f1_macro']:.4f}")
-    print(f"    Accuracy: {m_old['acc']:.4f}  ->  {m_new['acc']:.4f}")
-else:
-    print(f"    F1 Alto:  {m_new['f1_alto']:.4f}")
-    print(f"    F1 macro: {m_new['f1_macro']:.4f}")
-    print(f"    Accuracy: {m_new['acc']:.4f}")
-print(f"\n{SEP}\n")
+# ==============================================================================
+# 8. GUARDAR MODELO
+# ==============================================================================
+modelo_path = os.path.join(BASE, "backend_fastapi", "alumnos", "ml", "modelo_xgb.pkl")
+joblib.dump(modelo, modelo_path)
+print(f"\nModelo guardado en: {modelo_path}")

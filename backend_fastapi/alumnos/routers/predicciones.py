@@ -4,79 +4,89 @@ from typing import Optional
 from pydantic import BaseModel
 from database import get_db
 from alumnos.models import Alumno, Nota, Encuesta, PrediccionAcademica
-from alumnos.ml.prediccion import predecir_riesgo
+from alumnos.ml.prediccion import predecir_riesgo, obtener_shap
 
 router = APIRouter()
 
-_MAPEO_NOTAS = {"AD": 20, "A": 17, "B": 14, "C": 11}
-
-# Mapeo condicion_social (string del frontend) → valor numérico 0-24
-# para que el modelo ML reciba el mismo rango con el que fue entrenado
-_SOCIAL_NUMERICO = {
-    "ninguna": 4, "ningún problema": 4,
-    "leve": 6,
-    "moderado": 12, "moderada": 12,
-    "grave": 20,
-}
+_NOTA_NUM = {"C": 0, "B": 1, "A": 2, "AD": 3}
+_NOTA_LET = {0: "C", 1: "B", 2: "A", 3: "AD"}
 
 
 class GenerarPrediccionIn(BaseModel):
     alumno: int
 
 
-def _social_numerico(condicion: str) -> int:
-    return _SOCIAL_NUMERICO.get((condicion or "").lower().strip(), 4)
+def _promedio_bimestre(notas_bimestre: list) -> float:
+    """Promedio numérico (0-3) de una lista de notas literales."""
+    if not notas_bimestre:
+        return 0.0
+    return sum(_NOTA_NUM.get(n, 0) for n in notas_bimestre) / len(notas_bimestre)
 
 
-def _tdah_coded(prob: float) -> int:
-    if prob <= 0.30: return 0
-    if prob <= 0.70: return 1
-    return 2
+def _nivel_tdah(hi_total: int, da_total: int) -> str:
+    if hi_total > 10 or da_total > 10:
+        return "Con TDAH"
+    if hi_total >= 7 or da_total >= 7:
+        return "Sospechoso de TDAH"
+    return "Sin TDAH"
 
 
-def _nivel_tdah(da_total: int, hi_total: int) -> str:
-    if da_total > 10 or hi_total > 10:
-        return "Posible TDAH"
+def _nivel_tdah_prob(prob: float) -> str:
+    """Nivel de TDAH a partir de la probabilidad combinada (EDAH + rendimiento académico)."""
+    if prob > 0.66:
+        return "Con TDAH"
+    if prob >= 0.45:
+        return "Sospechoso de TDAH"
     return "Sin TDAH"
 
 
 def _pred_dict(p: PrediccionAcademica, alumno_nombre: str = None) -> dict:
     cond = p.condiciones_psicoeducativas or ""
-    total_atencion       = None
-    total_hiperactividad = None
-    prob_tdah_stored     = None
-
+    fields = {}
     for part in cond.split("|"):
         part = part.strip()
-        if part.startswith("Atención (total):"):
-            try: total_atencion = int(part.split(":")[1].strip().split("/")[0])
-            except Exception: pass
-        elif part.startswith("Hiperactividad (total):"):
-            try: total_hiperactividad = int(part.split(":")[1].strip().split("/")[0])
-            except Exception: pass
-        elif part.startswith("Prob TDAH:"):
-            try: prob_tdah_stored = float(part.split(":")[1].strip())
-            except Exception: pass
+        if ":" in part:
+            k, v = part.split(":", 1)
+            fields[k.strip()] = v.strip()
 
-    if total_atencion is not None and total_hiperactividad is not None:
-        nivel_tdah = _nivel_tdah(total_atencion, total_hiperactividad)
-    else:
-        nivel_tdah = None
+    def _int(key, default=None):
+        try: return int(fields[key].split("/")[0]) if key in fields else default
+        except: return default
+
+    def _float(key, default=None):
+        try: return float(fields[key]) if key in fields else default
+        except: return default
+
+    hi_total = _int("HI_total")
+    da_total = _int("DA_total")
+    nivel_tdah = fields.get("Nivel_TDAH") or (
+        _nivel_tdah(hi_total or 0, da_total or 0) if (hi_total is not None and da_total is not None) else None
+    )
 
     return {
-        "id": p.id,
-        "alumno": p.alumno_id,
-        "alumno_nombre": alumno_nombre,
-        "promedio_notas": p.promedio_notas,
-        "nivel_riesgo": p.nivel_riesgo,
-        "probabilidad": p.probabilidad,
-        "prediccion_notas": p.prediccion_notas,
-        "condiciones_psicoeducativas": p.condiciones_psicoeducativas,
-        "fecha_prediccion": p.fecha_prediccion.isoformat() if p.fecha_prediccion else None,
-        "nivel_tdah": nivel_tdah,
-        "total_atencion": total_atencion,
-        "total_hiperactividad": total_hiperactividad,
-        "prob_tdah": prob_tdah_stored,
+        "id":                           p.id,
+        "alumno":                       p.alumno_id,
+        "alumno_nombre":                alumno_nombre,
+        "promedio_notas":               p.promedio_notas,
+        "nivel_riesgo":                 p.nivel_riesgo,
+        "probabilidad":                 p.probabilidad,
+        "prediccion_notas":             p.prediccion_notas,
+        "condiciones_psicoeducativas":  p.condiciones_psicoeducativas,
+        "fecha_prediccion":             p.fecha_prediccion.isoformat() if p.fecha_prediccion else None,
+        "nivel_tdah":                   nivel_tdah,
+        "hi_total":                     hi_total,
+        "da_total":                     da_total,
+        "tc_total":                     _int("TC_total"),
+        "inasistencias":                _int("Inasistencias"),
+        "nota_b1":                      fields.get("Nota_B1"),
+        "nota_b2":                      fields.get("Nota_B2"),
+        "nota_b3":                      fields.get("Nota_B3"),
+        "nota_b4":                      fields.get("Nota_B4"),
+        "promedio_final":               fields.get("Promedio_Final"),
+        # compatibilidad con campos anteriores
+        "total_atencion":               da_total,
+        "total_hiperactividad":         hi_total,
+        "prob_tdah":                    _float("Prob_TDAH"),
     }
 
 
@@ -93,6 +103,47 @@ def list_predicciones(alumno: Optional[int] = None, db: Session = Depends(get_db
     return result
 
 
+@router.get("/predicciones/{pred_id}/shap/")
+def shap_prediccion(pred_id: int, db: Session = Depends(get_db)):
+    pred = db.query(PrediccionAcademica).filter(PrediccionAcademica.id == pred_id).first()
+    if not pred:
+        raise HTTPException(status_code=404, detail="Predicción no encontrada.")
+
+    cond = pred.condiciones_psicoeducativas or ""
+    fields = {}
+    for part in cond.split("|"):
+        part = part.strip()
+        if ":" in part:
+            k, v = part.split(":", 1)
+            fields[k.strip()] = v.strip()
+
+    def _int(key, default=0):
+        try: return int(fields[key].split("/")[0]) if key in fields else default
+        except: return default
+
+    def _float(key, default=0.0):
+        try: return float(fields[key]) if key in fields else default
+        except: return default
+
+    # Reconstruir vector de 26 features desde condiciones_psicoeducativas
+    hi_items = [_int(f"HI{i}") for i in range(1, 6)]
+    da_items = [_int(f"DA{i}") for i in range(1, 6)]
+    tc_items = [_int(f"TC{i}") for i in range(1, 11)]
+
+    datos = {
+        **{f"HI{i}": hi_items[i-1] for i in range(1, 6)},
+        **{f"DA{i}": da_items[i-1] for i in range(1, 6)},
+        **{f"TC{i}": tc_items[i-1] for i in range(1, 11)},
+        "Inasistencias":    _int("Inasistencias"),
+        "Nota_B1_Num":      _float("Nota_B1_Num"),
+        "Nota_B2_Num":      _float("Nota_B2_Num"),
+        "Nota_B3_Num":      _float("Nota_B3_Num"),
+        "Nota_B4_Num":      _float("Nota_B4_Num"),
+        "Promedio_Final_Num": _float("Promedio_Final_Num"),
+    }
+    return obtener_shap(datos, pred.nivel_riesgo or "Bajo", float(pred.probabilidad or 0))
+
+
 @router.post("/predicciones/generar/")
 def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db)):
     alumno_id = data.alumno
@@ -100,16 +151,7 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
     if not alumno:
         raise HTTPException(status_code=404, detail="Alumno no encontrado.")
 
-    notas = db.query(Nota).filter(Nota.alumno_id == alumno_id).all()
-    if not notas:
-        raise HTTPException(
-            status_code=400,
-            detail="No se pudo generar prediccion. Verifique notas y encuesta.",
-        )
-
-    valores = [_MAPEO_NOTAS.get(n.calificacion_literal, 0) for n in notas]
-    promedio_notas = sum(valores) / len(valores)
-
+    # ── Encuesta (EDAH + inasistencias) ─────────────────────────────────────
     encuesta = (
         db.query(Encuesta)
         .filter(Encuesta.alumno_id == alumno_id)
@@ -117,65 +159,113 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
         .first()
     )
     if not encuesta:
-        raise HTTPException(
-            status_code=400,
-            detail="No se pudo generar prediccion. Verifique notas y encuesta.",
-        )
+        raise HTTPException(status_code=400,
+            detail="No se pudo generar predicción. Registra la encuesta EDAH primero.")
 
-    total_atencion       = sum(getattr(encuesta, f"DA{i}") for i in range(1, 6))
-    total_hiperactividad = sum(getattr(encuesta, f"HI{i}") for i in range(1, 6))
-    total_conducta       = sum(getattr(encuesta, f"TC{i}") for i in range(1, 11))
+    hi_items = [getattr(encuesta, f"HI{i}") for i in range(1, 6)]
+    da_items = [getattr(encuesta, f"DA{i}") for i in range(1, 6)]
+    tc_items = [getattr(encuesta, f"TC{i}") for i in range(1, 11)]
+    hi_total = sum(hi_items)
+    da_total = sum(da_items)
+    tc_total = sum(tc_items)
+    inasistencias = getattr(encuesta, "inasistencias", 0)
 
-    # ── Probabilidad TDAH (fórmula) ────────────────────────────────────────────
-    prob_tdah  = round(max(total_atencion, total_hiperactividad) / 15.0, 4)
-    nivel_tdah = _nivel_tdah(total_atencion, total_hiperactividad)
+    # ── Notas por bimestre (opcionales) ──────────────────────────────────────
+    # La predicción se genera con o sin notas. Si no hay notas, el componente
+    # académico queda como "sin dato" y la predicción se apoya en la encuesta EDAH.
+    notas = db.query(Nota).filter(Nota.alumno_id == alumno_id).all()
 
-    # ── Predicción de Riesgo Académico (modelo ML) ─────────────────────────────
-    condicion_social_num = _social_numerico(alumno.condicion_social)
-    nivel_riesgo, probabilidad = predecir_riesgo({
-        "DA_total":         total_atencion,
-        "HI_total":         total_hiperactividad,
-        "promedio_notas":   promedio_notas,
-        "condicion_social": condicion_social_num,
-    })
+    def _notas_bimestre(b: int) -> list:
+        return [n.calificacion_literal for n in notas if getattr(n, "bimestre", 1) == b]
 
-    condiciones_texto = (
-        f"Atención (total): {total_atencion}/15 | "
-        f"Hiperactividad (total): {total_hiperactividad}/15 | "
-        f"Trastorno de Conducta (total): {total_conducta}/30 | "
-        f"Prob TDAH: {prob_tdah:.4f} | "
-        f"Condición social: {alumno.condicion_social} | "
-        f"Promedio notas: {promedio_notas:.2f}"
-    )
+    bimestres = {b: _notas_bimestre(b) for b in (1, 2, 3, 4)}
+    todas     = [n.calificacion_literal for n in notas]
 
-    pred = (
-        db.query(PrediccionAcademica)
-        .filter(PrediccionAcademica.alumno_id == alumno_id)
-        .first()
-    )
-    if pred:
-        pred.promedio_notas              = promedio_notas
-        pred.nivel_riesgo                = nivel_riesgo
-        pred.probabilidad                = probabilidad
-        pred.prediccion_notas            = f"{promedio_notas:.2f}"
-        pred.condiciones_psicoeducativas = condiciones_texto
+    # Valores numéricos para el MODELO: un bimestre SIN nota se pasa como NaN (dato
+    # faltante). XGBoost lo trata como "desconocido" y NO lo cuenta como C, de modo
+    # que las notas que no registras no inflan el riesgo académico.
+    _NAN = float("nan")
+    def _num_modelo(notas_b: list) -> float:
+        return round(_promedio_bimestre(notas_b), 4) if notas_b else _NAN
+    mb1, mb2, mb3, mb4 = (_num_modelo(bimestres[b]) for b in (1, 2, 3, 4))
+    m_pf = round(_promedio_bimestre(todas), 4) if todas else _NAN
+
+    # Promedio real de lo registrado (0.0 si no hay nada): solo para mostrar y TDAH.
+    pf_num = round(_promedio_bimestre(todas), 4)
+
+    def _letra(val): return _NOTA_LET.get(round(val), "C")
+
+    # Letras para MOSTRAR: reflejan solo lo realmente registrado ("—" si no hay nota).
+    def _letra_display(b: int) -> str:
+        return _letra(_promedio_bimestre(bimestres[b])) if bimestres[b] else "—"
+    nb1, nb2, nb3, nb4 = (_letra_display(b) for b in (1, 2, 3, 4))
+    pf_letra = _letra(pf_num) if todas else "—"
+
+    # ── Predicción ───────────────────────────────────────────────────────────
+    datos = {
+        **{f"HI{i}": hi_items[i-1] for i in range(1, 6)},
+        **{f"DA{i}": da_items[i-1] for i in range(1, 6)},
+        **{f"TC{i}": tc_items[i-1] for i in range(1, 11)},
+        "Inasistencias":      inasistencias,
+        "Nota_B1_Num":        mb1,
+        "Nota_B2_Num":        mb2,
+        "Nota_B3_Num":        mb3,
+        "Nota_B4_Num":        mb4,
+        "Promedio_Final_Num": m_pf,
+    }
+    nivel_riesgo, probabilidad = predecir_riesgo(datos)
+
+    # ── Indicador TDAH ────────────────────────────────────────────────────────
+    # Base: encuesta EDAH (atención/hiperactividad). Si hay notas, el rendimiento
+    # académico también influye: a peor promedio, mayor indicio de TDAH.
+    edah_prob = max(hi_total, da_total) / 15.0
+    if todas:
+        acad_factor = (3.0 - pf_num) / 3.0          # 0 (AD, mejor) … 1 (C, peor)
+        prob_tdah   = round(min(1.0, 0.70 * edah_prob + 0.30 * acad_factor), 4)
+        nivel_tdah  = _nivel_tdah_prob(prob_tdah)
     else:
-        pred = PrediccionAcademica(
-            alumno_id                = alumno_id,
-            promedio_notas           = promedio_notas,
-            nivel_riesgo             = nivel_riesgo,
-            probabilidad             = probabilidad,
-            prediccion_notas         = f"{promedio_notas:.2f}",
-            condiciones_psicoeducativas = condiciones_texto,
-        )
-        db.add(pred)
+        prob_tdah   = round(edah_prob, 4)
+        nivel_tdah  = _nivel_tdah(hi_total, da_total)
 
+    # ── Guardar condiciones (formato parseable por SHAP) ─────────────────────
+    condiciones = (
+        f"HI_total: {hi_total}/15 | DA_total: {da_total}/15 | TC_total: {tc_total}/30 | "
+        + " | ".join(f"HI{i}: {hi_items[i-1]}" for i in range(1, 6)) + " | "
+        + " | ".join(f"DA{i}: {da_items[i-1]}" for i in range(1, 6)) + " | "
+        + " | ".join(f"TC{i}: {tc_items[i-1]}" for i in range(1, 11)) + " | "
+        f"Inasistencias: {inasistencias} | "
+        f"Nota_B1: {nb1} | Nota_B2: {nb2} | "
+        f"Nota_B3: {nb3} | Nota_B4: {nb4} | "
+        f"Promedio_Final: {pf_letra} | "
+        f"Nota_B1_Num: {mb1} | Nota_B2_Num: {mb2} | "
+        f"Nota_B3_Num: {mb3} | Nota_B4_Num: {mb4} | "
+        f"Promedio_Final_Num: {m_pf} | Prob_TDAH: {prob_tdah} | Nivel_TDAH: {nivel_tdah}"
+    )
+
+    pred = PrediccionAcademica(
+        alumno_id                   = alumno_id,
+        promedio_notas              = pf_num,
+        nivel_riesgo                = nivel_riesgo,
+        probabilidad                = probabilidad,
+        prediccion_notas            = pf_letra,
+        condiciones_psicoeducativas = condiciones,
+    )
+    db.add(pred)
     db.commit()
     db.refresh(pred)
+
     result = _pred_dict(pred, f"{alumno.nombre} {alumno.apellido}")
-    result["nivel_tdah"]           = nivel_tdah
-    result["total_atencion"]       = total_atencion
-    result["total_hiperactividad"] = total_hiperactividad
-    result["total_conducta"]       = total_conducta
-    result["prob_tdah"]            = prob_tdah
+    result.update({
+        "nivel_tdah":   nivel_tdah,
+        "hi_total":     hi_total,
+        "da_total":     da_total,
+        "tc_total":     tc_total,
+        "inasistencias": inasistencias,
+        "nota_b1":      nb1,
+        "nota_b2":      nb2,
+        "nota_b3":      nb3,
+        "nota_b4":      nb4,
+        "promedio_final": pf_letra,
+        "prob_tdah":    prob_tdah,
+    })
     return result

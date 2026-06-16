@@ -45,6 +45,8 @@ class Encuesta(Base):
     TC8 = Column(Integer, nullable=False)
     TC9 = Column(Integer, nullable=False)
     TC10 = Column(Integer, nullable=False)
+    # Inasistencias del alumno en el período evaluado
+    inasistencias = Column(Integer, default=0, nullable=False)
     fecha_aplicacion = Column(Date, default=date.today)
 
 
@@ -55,6 +57,8 @@ class Nota(Base):
     alumno_id = Column(Integer, ForeignKey("alumnos.id"), nullable=False)
     asignatura = Column(String(100), nullable=False)
     calificacion_literal = Column(String(2), nullable=False)
+    # Bimestre al que corresponde la nota: 1, 2, 3 o 4
+    bimestre = Column(Integer, default=1, nullable=False)
     fecha_registro = Column(Date, default=date.today)
 
 
