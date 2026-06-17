@@ -1,4 +1,5 @@
 import os
+import json
 import joblib
 import pandas as pd
 import numpy as np
@@ -193,6 +194,43 @@ plt.close(fig)
 print(f"\nImagen matriz guardada en: {img_path}")
 
 # ==============================================================================
+# 6b. REPORTE DE MÉTRICAS (precision / recall / f1 / accuracy) — TRAIN vs VAL → PNG
+# ==============================================================================
+# Texto en consola (referencia)
+print("\n--- Reporte en Train ---")
+print(classification_report(y_train, y_pred_train, target_names=CLASES, digits=2))
+print("--- Reporte en Validación ---")
+print(classification_report(y_val, y_pred_val, target_names=CLASES, digits=2))
+
+# Tabla de métricas (precision / recall / f1) por clase + promedios → para heatmap
+def _tabla_metricas(y_true, y_pred):
+    rep = classification_report(y_true, y_pred, target_names=CLASES, output_dict=True)
+    filas = CLASES + ["macro avg", "weighted avg"]
+    data = [[rep[f]["precision"], rep[f]["recall"], rep[f]["f1-score"]] for f in filas]
+    df_m = pd.DataFrame(data, index=filas, columns=["Precision", "Recall", "F1-Score"])
+    return df_m, rep["accuracy"]
+
+dt_train, acc_train = _tabla_metricas(y_train, y_pred_train)
+dt_val,   acc_val   = _tabla_metricas(y_val,   y_pred_val)
+
+# Mismo formato visual que la matriz de confusión: 2 paneles (Train | Val), heatmap azul
+fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+for ax, df_m, acc, titulo in zip(axes, [dt_train, dt_val], [acc_train, acc_val],
+                                 ["Train", "Validación"]):
+    sns.heatmap(df_m, annot=True, fmt=".2f", cmap="Blues", vmin=0, vmax=1,
+                linewidths=0.5, ax=ax, cbar=False, annot_kws={"fontsize": 12})
+    ax.set_title(f"Métricas — {titulo}   (accuracy = {acc:.2f})",
+                 fontsize=13, fontweight="bold", pad=12)
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+    ax.tick_params(axis="x", labelrotation=0)
+plt.tight_layout()
+
+rep_path = os.path.join(BASE, "reporte_metricas.png")
+fig.savefig(rep_path, dpi=150, bbox_inches="tight")
+plt.close(fig)
+print(f"Imagen de métricas guardada en: {rep_path}")
+
+# ==============================================================================
 # 7. VALIDACIÓN CRUZADA ESTRATIFICADA (chequeo de robustez en consola)
 # ==============================================================================
 # Comprobación adicional de que no hay sobreajuste: el mismo modelo se reentrena
@@ -224,6 +262,42 @@ for tr_idx, te_idx in cv.split(X, y):
 print(f"Accuracy           CV: {np.mean(accs):.4f} ± {np.std(accs):.4f}")
 for c, nombre in zip((0, 1, 2), CLASES):
     print(f"Recall {nombre:<11} CV: {np.mean(rec_por_clase[c]):.4f} ± {np.std(rec_por_clase[c]):.4f}")
+
+# ==============================================================================
+# 7b. GUARDAR MÉTRICAS MACRO EN JSON (para mostrarlas en el dashboard)
+# ==============================================================================
+def _metricas_macro(y_true, y_pred):
+    rep  = classification_report(y_true, y_pred, target_names=CLASES, output_dict=True)
+    cm_c = confusion_matrix(y_true, y_pred, labels=[0, 1, 2])
+    esp  = []
+    for i in range(3):
+        tn = cm_c.sum() - (cm_c[i, :].sum() + cm_c[:, i].sum() - cm_c[i, i])
+        fp = cm_c[:, i].sum() - cm_c[i, i]
+        esp.append(tn / (tn + fp) if (tn + fp) > 0 else 0.0)
+    return {
+        "accuracy":            round(float(rep["accuracy"]), 4),
+        "precision_macro":     round(float(rep["macro avg"]["precision"]), 4),
+        "recall_macro":        round(float(rep["macro avg"]["recall"]), 4),
+        "f1_macro":            round(float(rep["macro avg"]["f1-score"]), 4),
+        "especificidad_macro": round(float(sum(esp) / 3), 4),
+    }
+
+metricas = {
+    "modelo": "XGBoost (multiclase TDAH)",
+    "n_train": int(len(y_train)),
+    "n_val": int(len(y_val)),
+    "train": _metricas_macro(y_train, y_pred_train),
+    "val":   _metricas_macro(y_val, y_pred_val),
+    "cv": {
+        "accuracy":     round(float(np.mean(accs)), 4),
+        "accuracy_std": round(float(np.std(accs)), 4),
+        "recall_con_tdah": round(float(np.mean(rec_por_clase[2])), 4),
+    },
+}
+metricas_path = os.path.join(BASE, "backend_fastapi", "alumnos", "ml", "metricas.json")
+with open(metricas_path, "w", encoding="utf-8") as f:
+    json.dump(metricas, f, indent=2, ensure_ascii=False)
+print(f"Métricas guardadas en: {metricas_path}")
 
 # ==============================================================================
 # 8. GUARDAR MODELO

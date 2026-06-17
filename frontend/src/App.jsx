@@ -5,7 +5,14 @@ import {
 } from "recharts";
 
 const API = "http://127.0.0.1:8000/api";
-const views = ["dashboard", "alumno", "lista", "encuesta", "predicciones", "notas", "expediente"];
+const views = ["dashboard", "general", "alumno", "lista", "encuesta", "predicciones", "notas", "expediente"];
+
+// Qué vistas puede ver cada rol (el docente no accede al expediente psicológico)
+const VIEWS_POR_ROL = {
+  "Administrador": views,
+  "Psicólogo": views,
+  "Docente": ["dashboard", "general", "alumno", "lista", "encuesta", "predicciones", "notas"],
+};
 const encuestaKeys = [
   "DA1", "DA2", "DA3", "DA4", "DA5",
   "HI1", "HI2", "HI3", "HI4", "HI5",
@@ -50,8 +57,17 @@ const encuestaLeyendaAtencion = "0: Nunca | 1: Algunas veces | 2: Bastantes vece
 
 const ASIGNATURAS_VALIDAS = [
   "Matemática", "Comunicación", "Ciencias Sociales", "Ciencia y Tecnología",
-  "Inglés", "Educación Física", "Arte", "Religión",
+  "Inglés", "Educación Física", "Arte y Cultura", "Religión",
+  "Desarrollo Personal, Ciudadanía y Cívica", "Educación para el Trabajo",
+  "Tutoría", "Ciencias Naturales",
 ];
+
+// Usuarios y roles que pueden acceder al sistema
+const USUARIOS = {
+  admin:     { password: "admin123",   rol: "Administrador" },
+  psicologo: { password: "psico123",   rol: "Psicólogo" },
+  docente:   { password: "docente123", rol: "Docente" },
+};
 
 function normalizarCalificacionLiteral(texto) {
   const t = String(texto).trim().toUpperCase();
@@ -117,33 +133,59 @@ async function req(path, options = {}) {
 
 const RIESGO_COLORS = { Alto: "#ef4444", Medio: "#f97316", Moderado: "#f97316", Bajo: "#22c55e" };
 const FACTOR_COLORS = ["#f97316", "#fb923c", "#3b82f6", "#22c55e", "#a855f7", "#14b8a6"];
+const PROB_COLORS = { "Probabilidad Alta": "#ef4444", "Probabilidad Media": "#f97316", "Probabilidad Baja": "#22c55e" };
 
-function buildAcadPieData(nivelRiesgo, probabilidad) {
-  const top = Math.round(probabilidad * 100);
-  const rem = 100 - top;
-  if (nivelRiesgo === "Alto") return [
-    { name: "Alto", value: top },
-    { name: "Medio", value: Math.round(rem * 0.62) },
-    { name: "Bajo", value: rem - Math.round(rem * 0.62) },
-  ];
-  if (nivelRiesgo === "Medio") return [
-    { name: "Alto", value: Math.round(rem * 0.55) },
-    { name: "Medio", value: top },
-    { name: "Bajo", value: rem - Math.round(rem * 0.55) },
-  ];
-  return [
-    { name: "Alto", value: Math.round(rem * 0.18) },
-    { name: "Medio", value: rem - Math.round(rem * 0.18) },
-    { name: "Bajo", value: top },
-  ];
+// Fecha legible: "16 de junio de 2026, 14:30"
+function formatFecha(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("es-PE", {
+    year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
 }
 
-function buildTdahPieData(probTdah) {
-  const pct = Math.round((probTdah ?? 0) * 100);
+// Mapea la clase del modelo (Sin TDAH / Sospechoso / Con TDAH) al nivel de
+// probabilidad de TDAH que se muestra en el dashboard.
+function tdahNivelProb(nivelTdah) {
+  if (nivelTdah === "Con TDAH") return "Alta";
+  if (nivelTdah === "Sospechoso" || String(nivelTdah).startsWith("Sospechoso")) return "Media";
+  return "Baja";  // Sin TDAH (o sin dato)
+}
+
+function buildAcadPieData(nivelRiesgo, probabilidad) {
+  // Dona invertida (medidor de seguridad): el verde ("Bajo") es la parte SIN
+  // riesgo = 100 − probabilidad. Si el riesgo es 0% toda la dona es verde;
+  // a menor probabilidad de riesgo, más verde se llena.
+  const riesgo = Math.max(0, Math.min(100, Math.round((probabilidad ?? 0) * 100)));
+  const data = [{ name: "Bajo", value: 100 - riesgo }];
+  if (riesgo > 0) {
+    const nombre = nivelRiesgo === "Alto" ? "Alto" : "Medio";  // color del riesgo restante
+    data.unshift({ name: nombre, value: riesgo });
+  }
+  return data.filter((d) => d.value > 0);
+}
+
+// Dona de TDAH en 3 niveles (Probabilidad Alta/Media/Baja). El nivel que predijo
+// el modelo es el gajo dominante (= su confianza); el resto se reparte.
+function buildTdahPieData(nivelProb, conf) {
+  const top = Math.round((conf ?? 0) * 100);
+  const rem = 100 - top;
+  if (nivelProb === "Alta") return [
+    { name: "Probabilidad Alta",  value: top },
+    { name: "Probabilidad Media", value: Math.round(rem * 0.6) },
+    { name: "Probabilidad Baja",  value: rem - Math.round(rem * 0.6) },
+  ];
+  if (nivelProb === "Media") return [
+    { name: "Probabilidad Alta",  value: Math.round(rem * 0.45) },
+    { name: "Probabilidad Media", value: top },
+    { name: "Probabilidad Baja",  value: rem - Math.round(rem * 0.45) },
+  ];
   return [
-    { name: "Posible TDAH", value: pct },
-    { name: "Sin TDAH",     value: 100 - pct },
-  ].filter((d) => d.value > 0);
+    { name: "Probabilidad Alta",  value: Math.round(rem * 0.18) },
+    { name: "Probabilidad Media", value: rem - Math.round(rem * 0.18) },
+    { name: "Probabilidad Baja",  value: top },
+  ];
 }
 
 function parseSocialPct(condStr) {
@@ -153,12 +195,11 @@ function parseSocialPct(condStr) {
 }
 
 function buildFactoresData(pred) {
-  const socialPct = parseSocialPct(pred.condiciones_psicoeducativas || "");
   return [
     { name: "Inatención", valor: Math.round((pred.total_atencion / 15) * 100) },
     { name: "Hiperactividad", valor: Math.round((pred.total_hiperactividad / 15) * 100) },
     { name: "Rend. Académico", valor: Math.round(((20 - (pred.promedio_notas || 0)) / 20) * 100) },
-    { name: "Cond. Social", valor: socialPct },
+    { name: "Inasistencias", valor: Math.min(100, Math.round(((pred.inasistencias ?? 0) / 20) * 100)) },
   ].sort((a, b) => b.valor - a.valor);
 }
 
@@ -224,19 +265,23 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
   if (pred) {
     const riesgoColor = pred.nivel_riesgo === "Alto" ? "#ef4444" : pred.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e";
     const tdahLevel = pred.nivel_tdah ?? "—";
-    const esTdah = tdahLevel === "Con TDAH" || tdahLevel === "Sospechoso de TDAH" || String(tdahLevel).startsWith("Posible");
+    const esTdah = !!pred.nivel_tdah && pred.nivel_tdah !== "Sin TDAH";
     const tdahColor = esTdah ? "#f97316" : "#22c55e";
-    const tdahProbPct = Math.round((pred.prob_tdah ?? 0) * 100);
-    const rendimiento = Math.round((pred.promedio_notas / 20) * 100);
-    const rendColor = rendimiento >= 75 ? "#22c55e" : rendimiento >= 50 ? "#f97316" : "#ef4444";
+    const tdahConfPct = pred.confianza_tdah != null
+      ? Math.round(pred.confianza_tdah * 100)
+      : Math.round((pred.prob_tdah ?? 0) * 100);
+    const rendLetra = pred.promedio_final ?? pred.prediccion_notas ?? "—";
+    const rendColor = (rendLetra === "AD" || rendLetra === "A") ? "#22c55e"
+      : rendLetra === "B" ? "#f97316"
+      : rendLetra === "C" ? "#ef4444" : "#94a3b8";
     const factores = buildFactoresData(pred);
     const recs = generarRecomendaciones(pred);
 
     dashboardHTML = `
       <div class="kpis">
         <div class="kpi"><span class="kpi-l">Riesgo Académico</span><span class="kpi-v" style="color:${riesgoColor}">${esc(pred.nivel_riesgo)}</span><span class="kpi-s">Probabilidad: ${Math.round((pred.probabilidad ?? 0) * 100)}%</span></div>
-        <div class="kpi"><span class="kpi-l">Riesgo TDAH</span><span class="kpi-v" style="color:${tdahColor}">${esc(tdahLevel)}</span><span class="kpi-s">Probabilidad: ${tdahProbPct}%</span></div>
-        <div class="kpi"><span class="kpi-l">Rendimiento General</span><span class="kpi-v" style="color:${rendColor}">${rendimiento}/100</span><span class="kpi-s">Promedio ponderado</span></div>
+        <div class="kpi"><span class="kpi-l">Indicador TDAH (modelo IA)</span><span class="kpi-v" style="color:${tdahColor}">${esc(tdahLevel)}</span><span class="kpi-s">Confianza: ${tdahConfPct}%</span></div>
+        <div class="kpi"><span class="kpi-l">Rendimiento General</span><span class="kpi-v" style="color:${rendColor}">${esc(rendLetra)}</span><span class="kpi-s">Promedio (nota literal)</span></div>
       </div>
       <h3>Factores que influyen en el riesgo</h3>
       <table class="bars">
@@ -279,7 +324,8 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
     prediccionHTML = `
       <table class="info">
         <tr><td class="k">Nivel de Riesgo Académico</td><td>${esc(pred.nivel_riesgo)} (${Math.round((pred.probabilidad ?? 0) * 100)}%)</td></tr>
-        <tr><td class="k">Indicador TDAH</td><td>${esc(pred.nivel_tdah ?? "—")} (${Math.round((pred.prob_tdah ?? 0) * 100)}%)</td></tr>
+        <tr><td class="k">Indicador TDAH (modelo IA)</td><td>${esc(pred.nivel_tdah ?? "—")} (${tdahConfPct}% de confianza)</td></tr>
+        ${pred.referencia_psicometrica ? `<tr><td class="k">Referencia psicométrica</td><td><span class="muted">${esc(pred.referencia_psicometrica)} — no decide la clasificación</span></td></tr>` : ""}
         <tr><td class="k">Atención (DA)</td><td>${pred.da_total ?? "—"}/15</td></tr>
         <tr><td class="k">Hiperactividad (HI)</td><td>${pred.hi_total ?? "—"}/15</td></tr>
         <tr><td class="k">Conducta (TC)</td><td>${pred.tc_total ?? "—"}/30</td></tr>
@@ -288,7 +334,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
         <tr><td class="k">Bimestre 3</td><td>${bimNota(pred.nota_b3)}</td></tr>
         <tr><td class="k">Bimestre 4</td><td>${bimNota(pred.nota_b4)}</td></tr>
         <tr><td class="k">Promedio Final</td><td>${esc(pred.promedio_final ?? pred.prediccion_notas ?? "—")} <span class="muted">(solo bimestres con nota)</span></td></tr>
-        <tr><td class="k">Fecha de predicción</td><td>${esc(pred.fecha_prediccion ?? "—")}</td></tr>
+        <tr><td class="k">Fecha de predicción</td><td>${esc(formatFecha(pred.fecha_prediccion))}</td></tr>
       </table>
       <h3>Interpretación (SHAP)</h3>
       <div class="interp">${interp}</div>`;
@@ -356,7 +402,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
 /* ── App ───────────────────────────────────────────────────────────────── */
 
 export default function App() {
-  const [auth, setAuth] = useState({ usuario: "", password: "", logged: false });
+  const [auth, setAuth] = useState({ usuario: "", password: "", logged: false, rol: "" });
   const [activeView, setActiveView] = useState("dashboard");
   const [status, setStatus] = useState({ msg: "", error: false });
   const [alumnos, setAlumnos] = useState([]);
@@ -389,6 +435,13 @@ export default function App() {
   const [shapPredId, setShapPredId] = useState(null);
   const [shapLoading, setShapLoading] = useState(false);
 
+  // Dashboard general + métricas + encuesta (ver respuestas)
+  const [metricas, setMetricas] = useState(null);
+  const [generalFiltro, setGeneralFiltro] = useState(null);   // { tipo: "riesgo"|"tdah", valor }
+  const [encuestaModo, setEncuestaModo] = useState("registrar");  // registrar | respuestas
+  const [encuestaVerAlumno, setEncuestaVerAlumno] = useState("");
+  const [encuestaRespuestas, setEncuestaRespuestas] = useState([]);
+
   const goToView = (v) => {
     setActiveView(v);
     setStatus({ msg: "", error: false });
@@ -398,8 +451,14 @@ export default function App() {
     setListaStatus({ msg: "", error: false });
     setListaVerAlumno(null);
     setListaEditAlumno(null);
+    setGeneralFiltro(null);
     if (v === "lista") loadTodosPredicciones();
+    if (v === "general") { loadTodosPredicciones(); loadMetricas(); }
   };
+
+  async function loadMetricas() {
+    try { setMetricas(await req("/metricas/")); } catch { setMetricas(null); }
+  }
 
   const alumnoOptions = useMemo(
     () => alumnos.map((a) => ({ value: a.id, label: `${a.nombre} ${a.apellido} - ${a.grado}` })),
@@ -444,6 +503,17 @@ export default function App() {
     }
   }, [auth.logged]);
 
+  // Carga las respuestas de la encuesta del alumno seleccionado (modo "ver respuestas").
+  useEffect(() => {
+    if (!auth.logged || activeView !== "encuesta" || encuestaModo !== "respuestas") return;
+    if (!encuestaVerAlumno) { setEncuestaRespuestas([]); return; }
+    let cancelled = false;
+    req(`/encuestas/?alumno=${encuestaVerAlumno}`)
+      .then((data) => { if (!cancelled) setEncuestaRespuestas(Array.isArray(data) ? data : []); })
+      .catch(() => { if (!cancelled) setEncuestaRespuestas([]); });
+    return () => { cancelled = true; };
+  }, [auth.logged, activeView, encuestaModo, encuestaVerAlumno]);
+
   // Carga las notas del alumno seleccionado (sirve tanto al histórico como al
   // formulario individual, que precarga la grilla del bimestre).
   useEffect(() => {
@@ -473,9 +543,10 @@ export default function App() {
 
   const onLogin = (e) => {
     e.preventDefault();
-    if (auth.usuario === "admin" && auth.password === "admin123") {
-      setAuth((s) => ({ ...s, logged: true }));
-      notify("Sesión iniciada correctamente.");
+    const u = USUARIOS[auth.usuario.trim().toLowerCase()];
+    if (u && u.password === auth.password) {
+      setAuth((s) => ({ ...s, logged: true, rol: u.rol }));
+      notify(`Sesión iniciada como ${u.rol}.`);
     } else {
       notify("Credenciales inválidas.", true);
     }
@@ -559,7 +630,7 @@ export default function App() {
       const riesgoMsg = await recalcularRiesgo(notaForm.alumno);
       setNotasStatus({
         msg: `Notas del Bimestre ${bimestre} guardadas (${entradas.length} curso(s)). `
-           + `Promedio del bimestre: ${prom.letra} (${prom.num}).${riesgoMsg}`,
+           + `Promedio del bimestre: ${prom.letra}.${riesgoMsg}`,
         error: false,
       });
     } catch (err) {
@@ -653,7 +724,12 @@ export default function App() {
             <input type="password" value={auth.password} onChange={(e) => setAuth({ ...auth, password: e.target.value })} required />
             <button type="submit">Iniciar Sesión</button>
           </form>
-          <small>Usuario: <strong>admin</strong> | Contraseña: <strong>admin123</strong></small>
+          <div style={{ fontSize: "0.78rem", color: "#64748b", marginTop: 6, lineHeight: 1.7 }}>
+            <div><strong>Accesos:</strong></div>
+            <div>👤 Administrador — <strong>admin</strong> / admin123</div>
+            <div>🧠 Psicólogo — <strong>psicologo</strong> / psico123</div>
+            <div>📚 Docente — <strong>docente</strong> / docente123</div>
+          </div>
           {status.msg && <p className="status" style={{ color: status.error ? "#d62828" : "#14732b" }}>{status.msg}</p>}
         </section>
       </main>
@@ -664,13 +740,16 @@ export default function App() {
 
   const navLabels = {
     dashboard:    { icon: "⊞", label: "Dashboard" },
+    general:      { icon: "▦", label: "Dashboard General" },
     alumno:       { icon: "◎", label: "Registrar Alumno" },
     lista:        { icon: "≡", label: "Lista de Alumnos" },
     encuesta:     { icon: "☰", label: "Encuesta" },
-    predicciones: { icon: "↗", label: "Predicciones" },
+    predicciones: { icon: "↗", label: "Historial de Predicciones" },
     notas:        { icon: "✎", label: "Subir Notas" },
     expediente:   { icon: "⊡", label: "Expediente Psicológico" },
   };
+
+  const viewsPermitidas = VIEWS_POR_ROL[auth.rol] ?? views;
 
   return (
     <div className="app-shell">
@@ -680,11 +759,11 @@ export default function App() {
           <span className="sidebar-logo">📖</span>
           <div>
             <h2>Sistema</h2>
-            <span>admin</span>
+            <span>{auth.rol || "admin"}</span>
           </div>
         </div>
         <nav>
-          {views.map((v) => {
+          {viewsPermitidas.map((v) => {
             const { icon, label } = navLabels[v];
             return (
               <button
@@ -714,19 +793,22 @@ export default function App() {
             ? (dashData.nivel_riesgo === "Alto" ? "#ef4444" : dashData.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e")
             : "#94a3b8";
 
-          const tdahLevel = dashData?.nivel_tdah ?? null;
-          const tdahColor = tdahLevel?.startsWith("Posible") ? "#f97316" : "#22c55e";
-          const tdahProbPct = dashData
-            ? Math.round((dashData.prob_tdah ?? (dashData.total_atencion + dashData.total_hiperactividad) / 30) * 100)
-            : 0;
-          const rendimiento = dashData ? Math.round((dashData.promedio_notas / 20) * 100) : 0;
-          const rendColor = rendimiento >= 75 ? "#22c55e" : rendimiento >= 50 ? "#f97316" : "#ef4444";
+          // Nivel de TDAH del modelo, mostrado como Probabilidad Baja/Media/Alta
+          const tdahNivel = dashData ? tdahNivelProb(dashData.nivel_tdah) : "Baja";
+          const tdahLevel = dashData ? `Probabilidad ${tdahNivel}` : null;
+          const esTdahPositivo = tdahNivel !== "Baja";
+          const tdahColor = PROB_COLORS[`Probabilidad ${tdahNivel}`] ?? "#22c55e";
+          // % junto al nivel = confianza del modelo en la clase predicha
+          const tdahConf = dashData?.confianza_tdah ?? dashData?.prob_tdah ?? 0;
+          const tdahConfPct = Math.round(tdahConf * 100);
+          // Rendimiento general como nota literal (AD / A / B / C)
+          const rendLetra = dashData?.promedio_final ?? dashData?.prediccion_notas ?? "—";
+          const rendColor = (rendLetra === "AD" || rendLetra === "A") ? "#22c55e"
+            : rendLetra === "B" ? "#f97316"
+            : rendLetra === "C" ? "#ef4444" : "#94a3b8";
 
-          const tdahProb    = dashData
-            ? (dashData.prob_tdah ?? ((dashData.total_atencion ?? 0) + (dashData.total_hiperactividad ?? 0)) / 30)
-            : 0;
           const acadPieData = dashData ? buildAcadPieData(dashData.nivel_riesgo, dashData.probabilidad) : [];
-          const tdahPieData = dashData ? buildTdahPieData(tdahProb) : [];
+          const tdahPieData = dashData ? buildTdahPieData(tdahNivel, tdahConf) : [];
           const factoresData = dashData ? buildFactoresData(dashData) : [];
           const recomendaciones = dashData ? generarRecomendaciones(dashData) : [];
 
@@ -795,9 +877,9 @@ export default function App() {
                           {tdahLevel}
                         </span>
                         <span className="kpi-sub">
-                          Probabilidad: {tdahProbPct}%
+                          Probabilidad: {tdahConfPct}%
                           <span className="kpi-arrow" style={{ color: tdahColor }}>
-                            {tdahLevel?.startsWith("Posible") ? " ⚠" : " ✓"}
+                            {esTdahPositivo ? " ⚠" : " ✓"}
                           </span>
                         </span>
                       </div>
@@ -808,9 +890,9 @@ export default function App() {
                       <div className="kpi-body">
                         <span className="kpi-label">Rendimiento General</span>
                         <span className="kpi-value" style={{ color: rendColor }}>
-                          {rendimiento} / 100
+                          {rendLetra}
                         </span>
-                        <span className="kpi-sub">Promedio ponderado</span>
+                        <span className="kpi-sub">Promedio (nota literal)</span>
                       </div>
                     </div>
                   </div>
@@ -850,10 +932,7 @@ export default function App() {
                             dataKey="value"
                           >
                             {tdahPieData.map((entry) => (
-                              <Cell
-                                key={entry.name}
-                                fill={entry.name === "Posible TDAH" ? "#f97316" : "#22c55e"}
-                              />
+                              <Cell key={entry.name} fill={PROB_COLORS[entry.name]} />
                             ))}
                           </Pie>
                           <Tooltip formatter={(v) => `${v}%`} />
@@ -911,6 +990,113 @@ export default function App() {
                   </div>
                 </>
               )}
+            </div>
+          );
+        })()}
+
+        {/* ── Dashboard General ──────────────────────── */}
+        {activeView === "general" && (() => {
+          const latestByAlumno = {};
+          todosPredicciones.forEach((p) => { if (!latestByAlumno[p.alumno]) latestByAlumno[p.alumno] = p; });
+          const latest = Object.values(latestByAlumno);
+
+          const riesgoCount = { Alto: 0, Medio: 0, Bajo: 0 };
+          const tdahCount = { Alta: 0, Media: 0, Baja: 0 };
+          latest.forEach((p) => {
+            if (riesgoCount[p.nivel_riesgo] != null) riesgoCount[p.nivel_riesgo]++;
+            tdahCount[tdahNivelProb(p.nivel_tdah)]++;
+          });
+
+          const m = metricas?.val;
+          const filtrados = !generalFiltro ? []
+            : generalFiltro.tipo === "riesgo"
+              ? latest.filter((p) => p.nivel_riesgo === generalFiltro.valor)
+              : latest.filter((p) => tdahNivelProb(p.nivel_tdah) === generalFiltro.valor);
+
+          const chip = (valor, count, color, tipo) => (
+            <div key={valor} role="button" tabIndex={0}
+              onClick={() => setGeneralFiltro({ tipo, valor })}
+              style={{ flex: 1, minWidth: 90, padding: "12px", borderRadius: 10, cursor: "pointer", textAlign: "center",
+                border: (generalFiltro?.tipo === tipo && generalFiltro?.valor === valor) ? `2px solid ${color}` : "1px solid #e2e8f0",
+                background: "#fff" }}>
+              <div style={{ fontSize: "1.8rem", fontWeight: 800, color }}>{count}</div>
+              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Prob. ${valor}` : valor}</div>
+            </div>
+          );
+
+          return (
+            <div className="dashboard">
+              <h1 className="page-title">Dashboard General</h1>
+
+              {/* Resumen */}
+              <div className="kpi-row">
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Alumnos registrados</span><span className="kpi-value" style={{ color: "#2563eb" }}>{alumnos.length}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Alumnos evaluados</span><span className="kpi-value" style={{ color: "#0ea5e9" }}>{latest.length}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Riesgo Académico Alto</span><span className="kpi-value" style={{ color: "#ef4444" }}>{riesgoCount.Alto}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Prob. Alta de TDAH</span><span className="kpi-value" style={{ color: "#ef4444" }}>{tdahCount.Alta}</span></div></div>
+              </div>
+
+              {/* Filtros por grupo */}
+              <div className="charts-row">
+                <div className="chart-panel">
+                  <h3 className="chart-title">Riesgo Académico — clic para ver alumnos</h3>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {["Alto", "Medio", "Bajo"].map((nv) => chip(nv, riesgoCount[nv], RIESGO_COLORS[nv], "riesgo"))}
+                  </div>
+                </div>
+                <div className="chart-panel">
+                  <h3 className="chart-title">Probabilidad de TDAH — clic para ver alumnos</h3>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    {["Alta", "Media", "Baja"].map((nv) => chip(nv, tdahCount[nv], PROB_COLORS["Probabilidad " + nv], "tdah"))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Lista filtrada */}
+              {generalFiltro && (
+                <article className="panel" style={{ marginTop: 16, overflowX: "auto" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <h3 style={{ margin: 0 }}>
+                      {generalFiltro.tipo === "riesgo"
+                        ? `Alumnos con Riesgo Académico ${generalFiltro.valor}`
+                        : `Alumnos con Probabilidad ${generalFiltro.valor} de TDAH`} ({filtrados.length})
+                    </h3>
+                    <button type="button" onClick={() => setGeneralFiltro(null)} style={{ width: "auto", padding: "4px 12px" }}>Limpiar filtro</button>
+                  </div>
+                  {filtrados.length === 0 ? <p style={{ color: "#64748b" }}>No hay alumnos en este grupo.</p> : (
+                    <table className="lista-table">
+                      <thead><tr><th>Alumno</th><th>Riesgo Académico</th><th>Indicador TDAH</th><th>Fecha</th></tr></thead>
+                      <tbody>
+                        {filtrados.map((p) => (
+                          <tr key={p.id}>
+                            <td>{p.alumno_nombre ?? `Alumno ${p.alumno}`}</td>
+                            <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
+                            <td><b style={{ color: PROB_COLORS["Probabilidad " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b> <span style={{ color: "#94a3b8" }}>({p.nivel_tdah})</span></td>
+                            <td style={{ fontSize: "0.8rem", color: "#64748b" }}>{formatFecha(p.fecha_prediccion)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </article>
+              )}
+
+              {/* Métricas del modelo */}
+              <article className="panel" style={{ marginTop: 16 }}>
+                <h3 className="chart-title">Métricas del Modelo (macro · conjunto de validación)</h3>
+                {m ? (
+                  <div className="kpi-row">
+                    {[["Accuracy", m.accuracy], ["Precisión", m.precision_macro], ["Recall", m.recall_macro], ["F1-Score", m.f1_macro], ["Especificidad", m.especificidad_macro]].map(([lbl, val]) => (
+                      <div key={lbl} className="kpi-card"><div className="kpi-body"><span className="kpi-label">{lbl}</span><span className="kpi-value" style={{ color: "#2563eb" }}>{(val * 100).toFixed(1)}%</span></div></div>
+                    ))}
+                  </div>
+                ) : <p style={{ color: "#64748b" }}>Métricas no disponibles (ejecuta el entrenamiento).</p>}
+                {metricas?.cv && (
+                  <p style={{ color: "#64748b", fontSize: "0.82rem", marginTop: 8 }}>
+                    Validación cruzada (5 folds): accuracy {(metricas.cv.accuracy * 100).toFixed(1)}% ± {(metricas.cv.accuracy_std * 100).toFixed(1)} · recall «Con TDAH» {(metricas.cv.recall_con_tdah * 100).toFixed(1)}%
+                  </p>
+                )}
+              </article>
             </div>
           );
         })()}
@@ -1073,15 +1259,6 @@ export default function App() {
                           <option value="Otro">Otro</option>
                         </select>
                       </div>
-                      <div className="field-group">
-                        <label>Condición Social</label>
-                        <select value={listaEditForm.condicion_social} onChange={(e) => setListaEditForm({ ...listaEditForm, condicion_social: e.target.value })}>
-                          <option value="NINGUNA">Ninguna</option>
-                          <option value="LEVE">Leve</option>
-                          <option value="MODERADA">Moderada</option>
-                          <option value="GRAVE">Grave</option>
-                        </select>
-                      </div>
                     </div>
                     <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                       <button onClick={guardarEdicion}>Guardar</button>
@@ -1142,6 +1319,11 @@ export default function App() {
         {activeView === "encuesta" && (
           <div className="encuesta-layout">
             <h1 className="page-title">Encuesta Psicoeducativa</h1>
+            <div className="toggle-row">
+              <button type="button" className={encuestaModo === "registrar" ? "toggle-btn toggle-btn--active" : "toggle-btn toggle-btn--inactive"} onClick={() => setEncuestaModo("registrar")}>Registrar Encuesta</button>
+              <button type="button" className={encuestaModo === "respuestas" ? "toggle-btn toggle-btn--active" : "toggle-btn toggle-btn--inactive"} onClick={() => setEncuestaModo("respuestas")}>Ver Respuestas</button>
+            </div>
+            {encuestaModo === "registrar" && (
             <article className="panel panel-encuesta">
               <form className="grid encuesta-form" onSubmit={submitEncuesta}>
                 <div className="field-group full">
@@ -1214,6 +1396,46 @@ export default function App() {
                 <button className="full" type="submit">Guardar Encuesta</button>
               </form>
             </article>
+            )}
+
+            {encuestaModo === "respuestas" && (
+              <article className="panel panel-encuesta">
+                <div className="field-group full">
+                  <label htmlFor="enc-ver-alumno">Selecciona Estudiante</label>
+                  <select id="enc-ver-alumno" value={encuestaVerAlumno} onChange={(e) => setEncuestaVerAlumno(e.target.value)}>
+                    <option value="">-- Selecciona --</option>
+                    {alumnoOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
+                </div>
+                {!encuestaVerAlumno && <p className="form-legend">Selecciona un estudiante para ver sus respuestas.</p>}
+                {encuestaVerAlumno && encuestaRespuestas.length === 0 && <p className="form-legend">No hay encuestas registradas para este estudiante.</p>}
+                {encuestaRespuestas.map((enc) => {
+                  const suma = (keys) => keys.reduce((s, k) => s + (enc[k] ?? 0), 0);
+                  const bloque = (titulo, keys, max) => (
+                    <div key={titulo} style={{ marginBottom: 14 }}>
+                      <h3 className="form-section__title">{titulo} <span style={{ color: "#2563eb" }}>({suma(keys)}/{max})</span></h3>
+                      <table className="lista-table" style={{ width: "100%" }}>
+                        <thead><tr><th style={{ width: 55 }}>Ítem</th><th>Pregunta</th><th style={{ width: 170 }}>Respuesta</th></tr></thead>
+                        <tbody>
+                          {keys.map((k) => (
+                            <tr key={k}><td>{k}</td><td style={{ fontSize: "0.8rem" }}>{encuestaLabels[k]}</td><td><b>{enc[k]}</b> – {_ESCALA_TXT[enc[k]] ?? ""}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                  return (
+                    <div key={enc.id} className="card full" style={{ marginTop: 12 }}>
+                      <div style={{ marginBottom: 8, color: "#64748b", fontWeight: 600 }}>📅 {formatFecha(enc.fecha_aplicacion)}</div>
+                      {bloque("Déficit de Atención (DA)", encuestaKeysDA, 15)}
+                      {bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, 15)}
+                      {bloque("Trastorno de Conducta (TC)", encuestaKeysTC, 30)}
+                      <p style={{ margin: "8px 0 0" }}><b>Inasistencias:</b> {enc.inasistencias ?? 0} día(s)</p>
+                    </div>
+                  );
+                })}
+              </article>
+            )}
           </div>
         )}
 
@@ -1244,19 +1466,26 @@ export default function App() {
                   <b>Nivel de Riesgo Académico:</b>{" "}
                   <span style={{ color: rColor, fontWeight: "bold" }}>{p.nivel_riesgo}</span>
                   {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
-                  <b>Indicador TDAH:</b>{" "}
-                  <span style={{ color: p.nivel_tdah === "Posible TDAH" ? "#d62828" : "#14732b", fontWeight: "bold" }}>
+                  <b>Indicador TDAH (modelo IA):</b>{" "}
+                  <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sin TDAH") ? "#d62828" : "#14732b", fontWeight: "bold" }}>
                     {p.nivel_tdah ?? "—"}
-                  </span><br />
+                  </span>
+                  {p.confianza_tdah != null && (
+                    <span style={{ color: "#475569" }}> ({(p.confianza_tdah * 100).toFixed(2)}% de confianza)</span>
+                  )}<br />
                   {p.total_atencion != null && (
                     <><b>Atención (DA):</b> {p.total_atencion}/15{"  "}<b>Hiperactividad (HI):</b> {p.total_hiperactividad}/15{"  "}{p.total_conducta != null && <><b>Conducta (TC):</b> {p.total_conducta}/30</>}<br /></>
                   )}
                   {p.prob_tdah != null && (
-                    <><b>Prob. TDAH:</b> {Math.round(p.prob_tdah * 100)}%<br /></>
+                    <><b>Prob. de TDAH (modelo):</b> {Math.round(p.prob_tdah * 100)}%<br /></>
+                  )}
+                  {p.referencia_psicometrica && (
+                    <small style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                      Referencia psicométrica (no decide): {p.referencia_psicometrica}<br />
+                    </small>
                   )}
                   <b>Promedio de Notas:</b> {p.prediccion_notas}<br />
-                  <b>Condiciones:</b> {p.condiciones_psicoeducativas}<br />
-                  <small style={{ color: "#888" }}>{p.fecha_prediccion}</small>
+                  <small style={{ color: "#64748b" }}>📅 {formatFecha(p.fecha_prediccion)}</small>
 
                   {/* Botón SHAP */}
                   <div style={{ marginTop: 10 }}>
@@ -1361,7 +1590,7 @@ export default function App() {
                     return (
                       <div className="full" style={{ padding: "10px 14px", background: "#f1f5f9", borderRadius: 8, fontSize: "0.92rem" }}>
                         <b>Promedio del bimestre (vista previa):</b>{" "}
-                        {prev ? <span style={{ fontWeight: 700, color: "#1e3a5f" }}>{prev.letra} ({prev.num})</span>
+                        {prev ? <span style={{ fontWeight: 700, color: "#1e3a5f" }}>{prev.letra}</span>
                               : <span style={{ color: "#94a3b8" }}>sin notas ingresadas</span>}
                       </div>
                     );
@@ -1403,7 +1632,7 @@ export default function App() {
                             <div key={b} className="card full">
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                                 <strong>Bimestre {b}</strong>
-                                <span>Promedio: <b style={{ color: "#1e3a5f" }}>{prom.letra} ({prom.num})</b></span>
+                                <span>Promedio: <b style={{ color: "#1e3a5f" }}>{prom.letra}</b></span>
                               </div>
                               <table className="lista-table" style={{ width: "100%" }}>
                                 <thead><tr><th>Curso</th><th>Nota</th></tr></thead>
@@ -1418,7 +1647,7 @@ export default function App() {
                         })}
                         <div className="card full" style={{ background: "#eef2ff", borderColor: "#c7d2fe" }}>
                           <strong>Promedio general:</strong>{" "}
-                          <b style={{ color: "#1e3a5f", fontSize: "1.05rem" }}>{promGeneral.letra} ({promGeneral.num})</b>
+                          <b style={{ color: "#1e3a5f", fontSize: "1.05rem" }}>{promGeneral.letra}</b>
                           <span style={{ color: "#64748b" }}> · promedio de todos los cursos y bimestres registrados</span>
                         </div>
                       </>

@@ -1,12 +1,26 @@
+import os
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
 from pydantic import BaseModel
 from database import get_db
 from alumnos.models import Alumno, Nota, Encuesta, PrediccionAcademica
-from alumnos.ml.prediccion import predecir_riesgo, obtener_shap
+from alumnos.ml.prediccion import predecir_riesgo, predecir_tdah, obtener_shap
 
 router = APIRouter()
+
+_METRICAS_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ml", "metricas.json"))
+
+
+@router.get("/metricas/")
+def get_metricas():
+    """Métricas macro del modelo (recall, f1, precision, accuracy, especificidad)."""
+    try:
+        with open(_METRICAS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 _NOTA_NUM = {"C": 0, "B": 1, "A": 2, "AD": 3}
 _NOTA_LET = {0: "C", 1: "B", 2: "A", 3: "AD"}
@@ -74,6 +88,8 @@ def _pred_dict(p: PrediccionAcademica, alumno_nombre: str = None) -> dict:
         "condiciones_psicoeducativas":  p.condiciones_psicoeducativas,
         "fecha_prediccion":             p.fecha_prediccion.isoformat() if p.fecha_prediccion else None,
         "nivel_tdah":                   nivel_tdah,
+        "confianza_tdah":               _float("Confianza_TDAH"),
+        "referencia_psicometrica":      fields.get("Referencia_Psicometrica"),
         "hi_total":                     hi_total,
         "da_total":                     da_total,
         "tc_total":                     _int("TC_total"),
@@ -215,17 +231,19 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
     }
     nivel_riesgo, probabilidad = predecir_riesgo(datos)
 
-    # ── Indicador TDAH ────────────────────────────────────────────────────────
-    # Base: encuesta EDAH (atención/hiperactividad). Si hay notas, el rendimiento
-    # académico también influye: a peor promedio, mayor indicio de TDAH.
-    edah_prob = max(hi_total, da_total) / 15.0
-    if todas:
-        acad_factor = (3.0 - pf_num) / 3.0          # 0 (AD, mejor) … 1 (C, peor)
-        prob_tdah   = round(min(1.0, 0.70 * edah_prob + 0.30 * acad_factor), 4)
-        nivel_tdah  = _nivel_tdah_prob(prob_tdah)
-    else:
-        prob_tdah   = round(edah_prob, 4)
-        nivel_tdah  = _nivel_tdah(hi_total, da_total)
+    # ── Indicador TDAH: lo decide EXCLUSIVAMENTE el MODELO de ML ───────────────
+    # El nivel (Sin TDAH / Sospechoso / Con TDAH) y su confianza provienen de
+    # modelo.predict_proba sobre las 26 variables (np.argmax). La regla de umbrales
+    # clínicos NO decide nada: se conserva solo como nota informativa.
+    tdah            = predecir_tdah(datos)
+    nivel_tdah      = tdah["nivel"]          # clase con mayor probabilidad (modelo)
+    confianza_tdah  = tdah["confianza"]      # probabilidad de la clase ganadora
+    prob_tdah       = tdah["prob_tdah"]      # P(Sospechoso) + P(Con TDAH)
+
+    # ── Referencia psicométrica (regla EDAH HI>=7 o DA>=7) — SOLO informativa ──
+    # Nunca pisa ni altera la salida del modelo; es una nota al pie clínica.
+    ref_clinica = _nivel_tdah(hi_total, da_total)
+    referencia_psicometrica = f"{ref_clinica} (cribado EDAH HI>=7 o DA>=7)"
 
     # ── Guardar condiciones (formato parseable por SHAP) ─────────────────────
     condiciones = (
@@ -239,7 +257,9 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
         f"Promedio_Final: {pf_letra} | "
         f"Nota_B1_Num: {mb1} | Nota_B2_Num: {mb2} | "
         f"Nota_B3_Num: {mb3} | Nota_B4_Num: {mb4} | "
-        f"Promedio_Final_Num: {m_pf} | Prob_TDAH: {prob_tdah} | Nivel_TDAH: {nivel_tdah}"
+        f"Promedio_Final_Num: {m_pf} | Prob_TDAH: {prob_tdah} | "
+        f"Confianza_TDAH: {confianza_tdah} | Nivel_TDAH: {nivel_tdah} | "
+        f"Referencia_Psicometrica: {referencia_psicometrica}"
     )
 
     pred = PrediccionAcademica(
@@ -257,6 +277,8 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
     result = _pred_dict(pred, f"{alumno.nombre} {alumno.apellido}")
     result.update({
         "nivel_tdah":   nivel_tdah,
+        "confianza_tdah": confianza_tdah,
+        "referencia_psicometrica": referencia_psicometrica,
         "hi_total":     hi_total,
         "da_total":     da_total,
         "tc_total":     tc_total,

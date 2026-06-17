@@ -66,6 +66,33 @@ def predecir_riesgo(datos: dict) -> tuple:
     return nivel, score
 
 
+_TDAH_LABELS = {0: "Sin TDAH", 1: "Sospechoso", 2: "Con TDAH"}
+
+
+def predecir_tdah(datos: dict) -> dict:
+    """Clasificación de TDAH según el MODELO de ML (XGBoost), no por reglas de umbral.
+
+    El resultado SIEMPRE proviene de modelo.predict_proba sobre las 26 variables.
+    Retorna un dict con:
+      - nivel:     etiqueta de la clase con mayor probabilidad (np.argmax)
+                   ∈ {"Sin TDAH", "Sospechoso", "Con TDAH"}.
+      - confianza: probabilidad de esa clase ganadora (el % que se muestra al lado).
+      - prob_tdah: P(Sospechoso) + P(Con TDAH) = probabilidad de presentar TDAH.
+      - proba:     las tres probabilidades [P(Sin), P(Sospechoso), P(Con)].
+    """
+    if modelo is None:
+        return {"nivel": "Sin TDAH", "confianza": 0.0, "prob_tdah": 0.0, "proba": [1.0, 0.0, 0.0]}
+    X     = np.array([_build_vector(datos)])
+    proba = modelo.predict_proba(X)[0]            # [P(Sin), P(Sospechoso), P(Con)]
+    clase = int(np.argmax(proba))
+    return {
+        "nivel":     _TDAH_LABELS[clase],
+        "confianza": round(float(proba[clase]), 4),
+        "prob_tdah": round(float(proba[1] + proba[2]), 4),
+        "proba":     [round(float(p), 4) for p in proba],
+    }
+
+
 def obtener_shap(datos: dict, nivel_predicho: str, probabilidad: float = 0.0) -> dict:
     if _explainer is None:
         return {"nivel": nivel_predicho, "base_value": 0.0, "features": [], "interpretacion": ""}
