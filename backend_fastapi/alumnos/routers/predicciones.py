@@ -6,7 +6,8 @@ from typing import Optional
 from pydantic import BaseModel
 from database import get_db
 from alumnos.models import Alumno, Nota, Encuesta, PrediccionAcademica
-from alumnos.ml.prediccion import predecir_riesgo, predecir_tdah, obtener_shap
+from alumnos.ml.prediccion import (predecir_tdah, obtener_shap,
+                                   predecir_riesgo, obtener_shap_riesgo)
 
 router = APIRouter()
 
@@ -141,23 +142,43 @@ def shap_prediccion(pred_id: int, db: Session = Depends(get_db)):
         try: return float(fields[key]) if key in fields else default
         except: return default
 
-    # Reconstruir vector de 26 features desde condiciones_psicoeducativas
-    hi_items = [_int(f"HI{i}") for i in range(1, 6)]
-    da_items = [_int(f"DA{i}") for i in range(1, 6)]
-    tc_items = [_int(f"TC{i}") for i in range(1, 11)]
-
+    # Reconstruir los 20 ítems EDAH desde condiciones_psicoeducativas
     datos = {
-        **{f"HI{i}": hi_items[i-1] for i in range(1, 6)},
-        **{f"DA{i}": da_items[i-1] for i in range(1, 6)},
-        **{f"TC{i}": tc_items[i-1] for i in range(1, 11)},
-        "Inasistencias":    _int("Inasistencias"),
-        "Nota_B1_Num":      _float("Nota_B1_Num"),
-        "Nota_B2_Num":      _float("Nota_B2_Num"),
-        "Nota_B3_Num":      _float("Nota_B3_Num"),
-        "Nota_B4_Num":      _float("Nota_B4_Num"),
-        "Promedio_Final_Num": _float("Promedio_Final_Num"),
+        **{f"HI{i}": _int(f"HI{i}") for i in range(1, 6)},
+        **{f"DA{i}": _int(f"DA{i}") for i in range(1, 6)},
+        **{f"TC{i}": _int(f"TC{i}") for i in range(1, 11)},
     }
-    return obtener_shap(datos, pred.nivel_riesgo or "Bajo", float(pred.probabilidad or 0))
+    nivel_tdah = fields.get("Nivel_TDAH", "Sin TDAH")
+    prob_tdah  = _float("Prob_TDAH")
+    return obtener_shap(datos, nivel_tdah, prob_tdah)
+
+
+@router.get("/predicciones/{pred_id}/shap-riesgo/")
+def shap_riesgo(pred_id: int, db: Session = Depends(get_db)):
+    """Explicación SHAP del MODELO 2 (Riesgo Académico)."""
+    pred = db.query(PrediccionAcademica).filter(PrediccionAcademica.id == pred_id).first()
+    if not pred:
+        raise HTTPException(status_code=404, detail="Predicción no encontrada.")
+
+    cond = pred.condiciones_psicoeducativas or ""
+    fields = {}
+    for part in cond.split("|"):
+        part = part.strip()
+        if ":" in part:
+            k, v = part.split(":", 1)
+            fields[k.strip()] = v.strip()
+
+    def _float(key, default=0.0):
+        try: return float(fields[key]) if key in fields else default
+        except: return default
+    def _int(key, default=0):
+        try: return int(fields[key].split("/")[0]) if key in fields else default
+        except: return default
+
+    pf = pred.promedio_notas
+    tiene_notas = (fields.get("Promedio_Final", "—") not in ("—", ""))
+    return obtener_shap_riesgo(pf, _int("Inasistencias"), _float("Prob_TDAH"),
+                               pred.nivel_riesgo or "Bajo", tiene_notas=tiene_notas)
 
 
 @router.post("/predicciones/generar/")
@@ -217,28 +238,23 @@ def generar_prediccion(data: GenerarPrediccionIn, db: Session = Depends(get_db))
     nb1, nb2, nb3, nb4 = (_letra_display(b) for b in (1, 2, 3, 4))
     pf_letra = _letra(pf_num) if todas else "—"
 
-    # ── Predicción ───────────────────────────────────────────────────────────
+    # ── Indicador TDAH: lo decide el MODELO usando SOLO la evaluación EDAH ─────
+    # Solo los 20 ítems (DA / HI / TC). Las inasistencias y notas NO influyen aquí,
+    # de modo que dos alumnos con el mismo EDAH dan el mismo indicador de TDAH.
     datos = {
         **{f"HI{i}": hi_items[i-1] for i in range(1, 6)},
         **{f"DA{i}": da_items[i-1] for i in range(1, 6)},
         **{f"TC{i}": tc_items[i-1] for i in range(1, 11)},
-        "Inasistencias":      inasistencias,
-        "Nota_B1_Num":        mb1,
-        "Nota_B2_Num":        mb2,
-        "Nota_B3_Num":        mb3,
-        "Nota_B4_Num":        mb4,
-        "Promedio_Final_Num": m_pf,
     }
-    nivel_riesgo, probabilidad = predecir_riesgo(datos)
-
-    # ── Indicador TDAH: lo decide EXCLUSIVAMENTE el MODELO de ML ───────────────
-    # El nivel (Sin TDAH / Sospechoso / Con TDAH) y su confianza provienen de
-    # modelo.predict_proba sobre las 26 variables (np.argmax). La regla de umbrales
-    # clínicos NO decide nada: se conserva solo como nota informativa.
     tdah            = predecir_tdah(datos)
     nivel_tdah      = tdah["nivel"]          # clase con mayor probabilidad (modelo)
     confianza_tdah  = tdah["confianza"]      # probabilidad de la clase ganadora
     prob_tdah       = tdah["prob_tdah"]      # P(Sospechoso) + P(Con TDAH)
+
+    # ── Riesgo Académico: MODELO 2 (XGBoost) = Notas + Inasistencias + Prob_TDAH ─
+    riesgo       = predecir_riesgo(pf_num, inasistencias, prob_tdah, tiene_notas=bool(todas))
+    nivel_riesgo = riesgo["nivel"]
+    probabilidad = riesgo["probabilidad"]
 
     # ── Referencia psicométrica (regla EDAH HI>=7 o DA>=7) — SOLO informativa ──
     # Nunca pisa ni altera la salida del modelo; es una nota al pie clínica.

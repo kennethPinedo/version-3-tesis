@@ -14,71 +14,49 @@ else:
     _explainer = None
     print("AVISO: Modelo no encontrado. Ejecuta entrenar_modelo.py primero.")
 
-_RIESGO_MAP = {0: "Bajo", 1: "Medio", 2: "Alto"}
-_CLASE_IDX  = {"Bajo": 0, "Medio": 1, "Alto": 2}
+# ── MODELO 2: Riesgo Académico (Notas + Inasistencias + Prob_TDAH) ────────────
+_MODELO_RIESGO_PATH = os.path.join(os.path.dirname(__file__), "modelo_riesgo_xgb.pkl")
+if os.path.exists(_MODELO_RIESGO_PATH):
+    modelo_riesgo     = joblib.load(_MODELO_RIESGO_PATH)
+    _explainer_riesgo = shap.TreeExplainer(modelo_riesgo)
+else:
+    modelo_riesgo     = None
+    _explainer_riesgo = None
+    print("AVISO: Modelo de riesgo no encontrado. Ejecuta entrenar_riesgo.py.")
 
-# Orden exacto de features con el que fue entrenado el modelo
-# Item_01-05 = HI1-HI5 (Hiperactividad)
+_RIESGO_LABELS   = {0: "Bajo", 1: "Medio", 2: "Alto"}
+_RIESGO_IDX      = {"Bajo": 0, "Medio": 1, "Alto": 2}
+_FEATURES_RIESGO = ["Promedio_Final_Num", "Inasistencias", "Prob_TDAH"]
+
+# El indicador de TDAH se determina SOLO con la evaluación EDAH (20 ítems):
+# Item_01-05 = HI1-HI5 (Hiperactividad/Impulsividad)
 # Item_06-10 = DA1-DA5 (Déficit de Atención)
-# Item_11-20 = TC1-TC10 (Trastorno de Conducta)
-_FEATURE_NAMES = [
-    "Item_01", "Item_02", "Item_03", "Item_04", "Item_05",
-    "Item_06", "Item_07", "Item_08", "Item_09", "Item_10",
-    "Item_11", "Item_12", "Item_13", "Item_14", "Item_15",
-    "Item_16", "Item_17", "Item_18", "Item_19", "Item_20",
-    "Inasistencias",
-    "Nota_B1_Num", "Nota_B2_Num", "Nota_B3_Num", "Nota_B4_Num",
-    "Promedio_Final_Num",
-]
+# Item_11-20 = TC1-TC10 (Trastornos de Conducta)
+# Las inasistencias y notas NO entran aquí (van en el Riesgo Académico).
+_FEATURE_NAMES = [f"Item_{str(i).zfill(2)}" for i in range(1, 21)]
 
-_NOTA_NUM = {"C": 0, "B": 1, "A": 2, "AD": 3}
+# El indicador de TDAH se expresa como nivel de SOSPECHA (Baja / Media / Alta).
+# Clase 0 = sin indicios, 1 = indicios moderados, 2 = indicios altos.
+_TDAH_LABELS = {0: "Sospecha Baja", 1: "Sospecha Media", 2: "Sospecha Alta"}
+_CLASE_IDX   = {"Sospecha Baja": 0, "Sospecha Media": 1, "Sospecha Alta": 2}
 
 
 def _build_vector(datos: dict) -> list:
-    """Construye el vector de 26 features en el orden correcto."""
+    """Vector de 20 ítems EDAH (HI + DA + TC) en el orden de entrenamiento."""
     hi = [datos[f"HI{i}"] for i in range(1, 6)]   # → Item_01-05
     da = [datos[f"DA{i}"] for i in range(1, 6)]   # → Item_06-10
     tc = [datos[f"TC{i}"] for i in range(1, 11)]  # → Item_11-20
-    return hi + da + tc + [
-        datos["Inasistencias"],
-        datos["Nota_B1_Num"],
-        datos["Nota_B2_Num"],
-        datos["Nota_B3_Num"],
-        datos["Nota_B4_Num"],
-        datos["Promedio_Final_Num"],
-    ]
-
-
-def predecir_riesgo(datos: dict) -> tuple:
-    """Retorna (nivel: str, score: float). nivel ∈ {Bajo, Medio, Alto}."""
-    if modelo is None:
-        return "Bajo", 0.0
-    X    = np.array([_build_vector(datos)])
-    prob = modelo.predict_proba(X)[0]
-    # Score ponderado: clase 1 (Sospechoso/Medio) cuenta 0.5, clase 2 (TDAH/Alto) cuenta 1.0
-    score = round(0.5 * float(prob[1]) + float(prob[2]), 4)
-    if score <= 0.33:
-        nivel = "Bajo"
-    elif score <= 0.66:
-        nivel = "Medio"
-    else:
-        nivel = "Alto"
-    return nivel, score
-
-
-_TDAH_LABELS = {0: "Sin TDAH", 1: "Sospechoso", 2: "Con TDAH"}
+    return hi + da + tc
 
 
 def predecir_tdah(datos: dict) -> dict:
-    """Clasificación de TDAH según el MODELO de ML (XGBoost), no por reglas de umbral.
+    """Clasificación de TDAH según el MODELO (XGBoost) usando SOLO la evaluación EDAH.
 
-    El resultado SIEMPRE proviene de modelo.predict_proba sobre las 26 variables.
-    Retorna un dict con:
-      - nivel:     etiqueta de la clase con mayor probabilidad (np.argmax)
-                   ∈ {"Sin TDAH", "Sospechoso", "Con TDAH"}.
-      - confianza: probabilidad de esa clase ganadora (el % que se muestra al lado).
+    Retorna:
+      - nivel:     clase con mayor probabilidad ∈ {"Sin TDAH","Sospechoso","Con TDAH"}.
+      - confianza: probabilidad de la clase ganadora.
       - prob_tdah: P(Sospechoso) + P(Con TDAH) = probabilidad de presentar TDAH.
-      - proba:     las tres probabilidades [P(Sin), P(Sospechoso), P(Con)].
+      - proba:     [P(Sin), P(Sospechoso), P(Con)].
     """
     if modelo is None:
         return {"nivel": "Sin TDAH", "confianza": 0.0, "prob_tdah": 0.0, "proba": [1.0, 0.0, 0.0]}
@@ -93,13 +71,14 @@ def predecir_tdah(datos: dict) -> dict:
     }
 
 
-def obtener_shap(datos: dict, nivel_predicho: str, probabilidad: float = 0.0) -> dict:
+def obtener_shap(datos: dict, nivel_tdah: str, prob_tdah: float = 0.0) -> dict:
+    """Explica la clasificación de TDAH según el aporte de cada subescala EDAH."""
     if _explainer is None:
-        return {"nivel": nivel_predicho, "base_value": 0.0, "features": [], "interpretacion": ""}
+        return {"nivel": nivel_tdah, "base_value": 0.0, "features": [], "interpretacion": ""}
 
     X         = np.array([_build_vector(datos)])
     shap_vals = _explainer.shap_values(X)
-    class_idx = _CLASE_IDX.get(nivel_predicho, 0)
+    class_idx = _CLASE_IDX.get(nivel_tdah, 0)
     ev        = _explainer.expected_value
 
     if isinstance(shap_vals, list):
@@ -112,169 +91,137 @@ def obtener_shap(datos: dict, nivel_predicho: str, probabilidad: float = 0.0) ->
         sv   = shap_vals[0]
         base = float(ev[class_idx]) if hasattr(ev, "__len__") else float(ev)
 
-    # ── Agrupación en 3 bloques temáticos ────────────────────────────────────
-    # [0-4]   HI  → Hiperactividad
-    # [5-9]   DA  → Déficit de Atención
-    # [10-19] TC  → Trastorno de Conducta
-    # [20]    Inasistencias
-    # [21-25] Notas B1-B4 + Promedio Final
+    hi_total = sum(datos[f"HI{i}"] for i in range(1, 6))
+    da_total = sum(datos[f"DA{i}"] for i in range(1, 6))
+    tc_total = sum(datos[f"TC{i}"] for i in range(1, 11))
 
-    hi_total  = sum(datos[f"HI{i}"] for i in range(1, 6))
-    da_total  = sum(datos[f"DA{i}"] for i in range(1, 6))
-    tc_total  = sum(datos[f"TC{i}"] for i in range(1, 11))
+    shap_hi = round(float(sum(sv[0:5])),   4)
+    shap_da = round(float(sum(sv[5:10])),  4)
+    shap_tc = round(float(sum(sv[10:20])), 4)
 
-    shap_hi    = round(float(sum(sv[0:5])),   4)
-    shap_da    = round(float(sum(sv[5:10])),  4)
-    shap_tc    = round(float(sum(sv[10:20])), 4)
-    shap_edah  = round(shap_hi + shap_da + shap_tc, 4)  # bloque TDAH unificado
-    shap_inast = round(float(sv[20]), 4)
-    shap_notas = round(float(sum(sv[21:26])), 4)
-
-    promedio_num = datos.get("Promedio_Final_Num", 0)
+    def _dir(s):
+        return "↑ Aumenta TDAH" if s > 0 else "↓ Reduce TDAH"
 
     features = [
-        {
-            "feature":   "edah",
-            "label":     "Indicadores TDAH (EDAH)",
-            "value_fmt": f"HI:{hi_total}/15  DA:{da_total}/15  TC:{tc_total}/30",
-            "shap":      shap_edah,
-            "direccion": "↑ Aumenta riesgo" if shap_edah > 0 else "↓ Reduce riesgo",
-        },
-        {
-            "feature":   "inasistencias",
-            "label":     "Inasistencias",
-            "value_fmt": str(int(datos["Inasistencias"])),
-            "shap":      shap_inast,
-            "direccion": "↑ Aumenta riesgo" if shap_inast > 0 else "↓ Reduce riesgo",
-        },
-        {
-            "feature":   "notas",
-            "label":     "Rendimiento Académico",
-            "value_fmt": _num_a_letra(promedio_num),
-            "shap":      shap_notas,
-            "direccion": "↑ Aumenta riesgo" if shap_notas > 0 else "↓ Reduce riesgo",
-        },
+        {"feature": "da", "label": "Déficit de Atención (DA)",        "value_fmt": f"{da_total}/15", "shap": shap_da, "direccion": _dir(shap_da)},
+        {"feature": "hi", "label": "Hiperactividad/Impulsividad (HI)", "value_fmt": f"{hi_total}/15", "shap": shap_hi, "direccion": _dir(shap_hi)},
+        {"feature": "tc", "label": "Trastornos de Conducta (TC)",      "value_fmt": f"{tc_total}/30", "shap": shap_tc, "direccion": _dir(shap_tc)},
     ]
     features.sort(key=lambda f: abs(f["shap"]), reverse=True)
 
-    interpretacion = _generar_interpretacion(nivel_predicho, features, datos, probabilidad)
+    interpretacion = _generar_interpretacion(nivel_tdah, hi_total, da_total, tc_total, prob_tdah)
     return {
-        "nivel":          nivel_predicho,
+        "nivel":          nivel_tdah,
         "base_value":     round(base, 4),
         "features":       features,
         "interpretacion": interpretacion,
     }
 
 
+def _generar_interpretacion(nivel: str, hi_total: int, da_total: int, tc_total: int, prob_tdah: float = 0.0) -> str:
+    prob_pct = round(prob_tdah * 100, 1)
+
+    def nivel_sub(v: int, mx: int) -> str:
+        r = v / mx
+        if r >= 0.60: return "elevado"
+        if r >= 0.45: return "moderado"
+        return "bajo"
+
+    da_n = nivel_sub(da_total, 15)
+    hi_n = nivel_sub(hi_total, 15)
+    tc_n = nivel_sub(tc_total, 30)
+
+    p1 = (
+        f"La evaluación EDAH muestra Déficit de Atención {da_n} ({da_total}/15), "
+        f"Hiperactividad/Impulsividad {hi_n} ({hi_total}/15) y Trastornos de Conducta {tc_n} ({tc_total}/30). "
+        f"El déficit de atención y la hiperactividad/impulsividad son los indicadores nucleares del TDAH; "
+        f"la conducta es un factor secundario."
+    )
+
+    if nivel == "Sospecha Alta":
+        p2 = (f"Los indicadores nucleares (atención e hiperactividad) son altos, por lo que el modelo "
+              f"estima una «Sospecha Alta» de TDAH (probabilidad: {prob_pct}%); se recomienda "
+              f"evaluación diagnóstica especializada.")
+    elif nivel == "Sospecha Media":
+        p2 = (f"Los indicadores de atención e hiperactividad son moderados, por lo que el modelo estima "
+              f"una «Sospecha Media» de TDAH ({prob_pct}%); conviene seguimiento y evaluación.")
+    else:
+        p2 = (f"Los indicadores nucleares del TDAH son bajos, por lo que el modelo estima una "
+              f"«Sospecha Baja» de TDAH (probabilidad: {prob_pct}%).")
+
+    return p1 + "\n\n" + p2
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MODELO 2 — RIESGO ACADÉMICO (XGBoost + SHAP)
+# ══════════════════════════════════════════════════════════════════════════════
+
 def _num_a_letra(val: float) -> str:
+    try:
+        if val != val:  # NaN
+            return "—"
+    except Exception:
+        return "—"
     if val >= 2.5: return "AD"
     if val >= 1.5: return "A"
     if val >= 0.5: return "B"
     return "C"
 
 
-def _generar_interpretacion(nivel: str, features: list, datos: dict, probabilidad: float = 0.0) -> str:
-    prob_pct = round(probabilidad * 100, 1)
+def predecir_riesgo(promedio_num: float, inasistencias: int, prob_tdah: float,
+                    tiene_notas: bool = True) -> dict:
+    """Riesgo Académico según el MODELO 2 (XGBoost) usando Notas + Inasistencias + Prob_TDAH.
 
-    hi_total  = sum(datos[f"HI{i}"] for i in range(1, 6))
-    da_total  = sum(datos[f"DA{i}"] for i in range(1, 6))
-    tc_total  = sum(datos[f"TC{i}"] for i in range(1, 11))
-    inasist   = int(datos["Inasistencias"])
-    prom_num  = datos.get("Promedio_Final_Num", 0)
-    prom_letra = _num_a_letra(prom_num)
+    Retorna: nivel ∈ {Bajo, Medio, Alto}, probabilidad (score 0-1), confianza, proba[3].
+    """
+    if modelo_riesgo is None:
+        return {"nivel": "Bajo", "probabilidad": 0.0, "confianza": 0.0, "proba": [1.0, 0.0, 0.0]}
+    pf = float(promedio_num) if tiene_notas else float("nan")
+    X  = np.array([[pf, float(inasistencias), float(prob_tdah)]])
+    proba = modelo_riesgo.predict_proba(X)[0]
+    clase = int(np.argmax(proba))
+    score = round(0.5 * float(proba[1]) + float(proba[2]), 4)   # 0 (Bajo) … 1 (Alto)
+    return {
+        "nivel":        _RIESGO_LABELS[clase],
+        "probabilidad": score,
+        "confianza":    round(float(proba[clase]), 4),
+        "proba":        [round(float(p), 4) for p in proba],
+    }
 
-    def edah_nivel():
-        total_edah = hi_total + da_total + tc_total
-        if total_edah >= 35: return "elevados"
-        if total_edah >= 20: return "moderados"
-        return "bajos"
 
-    def inasist_nivel():
-        if inasist >= 15: return "alta"
-        if inasist >= 8:  return "moderada"
-        return "baja"
+def obtener_shap_riesgo(promedio_num: float, inasistencias: int, prob_tdah: float,
+                        nivel: str, tiene_notas: bool = True) -> dict:
+    """Explica el Riesgo Académico (aporte de Notas, Inasistencias y Prob_TDAH)."""
+    if _explainer_riesgo is None:
+        return {"nivel": nivel, "features": [], "interpretacion": ""}
+    pf = float(promedio_num) if tiene_notas else float("nan")
+    X  = np.array([[pf, float(inasistencias), float(prob_tdah)]])
+    sv = _explainer_riesgo.shap_values(X)
+    idx = _RIESGO_IDX.get(nivel, 0)
+    if isinstance(sv, list):
+        s = sv[idx][0]
+    elif sv.ndim == 3:
+        s = sv[0, :, idx]
+    else:
+        s = sv[0]
 
-    def prom_nivel():
-        if prom_letra == "AD": return "excelente (AD)"
-        if prom_letra == "A":  return "bueno (A)"
-        if prom_letra == "B":  return "en proceso (B)"
-        return "en inicio (C)"
-
-    # EDAH siempre primero — es la variable central del modelo
-    edah_f  = next((f for f in features if f["feature"] == "edah"), None)
-    other_f = [f for f in features if f["feature"] != "edah"]
-
-    paragraphs = []
-
-    # ── Párrafo 1: indicadores EDAH ─────────────────────────────────────────
-    if edah_f:
-        nd  = edah_nivel()
-        inc = edah_f["shap"] > 0
-        if inc:
-            p1 = (
-                f"El estudiante presenta indicadores {nd} en la evaluación EDAH "
-                f"(Hiperactividad: {hi_total}/15, Déficit de Atención: {da_total}/15, "
-                f"Trastorno de Conducta: {tc_total}/30), constituyendo el factor central "
-                f"que influye en el incremento del riesgo académico estimado por el modelo."
-            )
-        else:
-            p1 = (
-                f"El estudiante presenta indicadores {nd} en la evaluación EDAH "
-                f"(Hiperactividad: {hi_total}/15, Déficit de Atención: {da_total}/15, "
-                f"Trastorno de Conducta: {tc_total}/30), siendo el elemento de mayor "
-                f"influencia en la reducción del riesgo académico estimado."
-            )
-        paragraphs.append(p1)
-
-    # ── Párrafo 2: factores secundarios ─────────────────────────────────────
-    if other_f:
-        parts = []
-        for f in other_f:
-            name = f["feature"]
-            inc  = f["shap"] > 0
-            if name == "inasistencias":
-                nd_i = inasist_nivel()
-                if inc:
-                    parts.append(
-                        f"la {nd_i} cantidad de inasistencias ({inasist} días) "
-                        f"representa un factor adicional de riesgo"
-                    )
-                else:
-                    parts.append(
-                        f"la {nd_i} cantidad de inasistencias ({inasist} días) "
-                        f"contribuye a mitigar el riesgo estimado"
-                    )
-            elif name == "notas":
-                nd_p = prom_nivel()
-                if inc:
-                    if prom_letra in ("A", "AD"):
-                        parts.append(
-                            f"el {nd_p} rendimiento académico no logra compensar "
-                            f"completamente los demás factores de riesgo presentes"
-                        )
-                    else:
-                        parts.append(
-                            f"el rendimiento académico {nd_p} representa "
-                            f"un factor adicional de riesgo"
-                        )
-                else:
-                    parts.append(
-                        f"el {nd_p} rendimiento académico contribuye a "
-                        f"mitigar el riesgo estimado"
-                    )
-
-        if len(parts) == 1:
-            connector = "Asimismo" if other_f[0]["shap"] > 0 else "Por otro lado"
-            paragraphs.append(f"{connector}, {parts[0]}.")
-        elif len(parts) == 2:
-            same_dir = (other_f[0]["shap"] > 0) == (other_f[1]["shap"] > 0)
-            joiner   = "así como" if same_dir else "mientras que"
-            paragraphs.append(f"Adicionalmente, {parts[0]}, {joiner} {parts[1]}.")
-
-    # ── Párrafo final ────────────────────────────────────────────────────────
-    paragraphs.append(
-        f"En consecuencia, el sistema clasifica al estudiante con un nivel de "
-        f"Riesgo Académico {nivel} ({prob_pct}%)."
-    )
-
-    return "\n\n".join(paragraphs)
+    labels = {"Promedio_Final_Num": "Rendimiento (notas)", "Inasistencias": "Inasistencias",
+              "Prob_TDAH": "Probabilidad de TDAH"}
+    vals   = {"Promedio_Final_Num": _num_a_letra(pf) if tiene_notas else "Sin notas",
+              "Inasistencias": str(int(inasistencias)),
+              "Prob_TDAH": f"{round(prob_tdah * 100)}%"}
+    feats = []
+    for i, fn in enumerate(_FEATURES_RIESGO):
+        feats.append({
+            "feature":   fn,
+            "label":     labels[fn],
+            "value_fmt": vals[fn],
+            "shap":      round(float(s[i]), 4),
+            "direccion": "↑ Aumenta riesgo" if s[i] > 0 else "↓ Reduce riesgo",
+        })
+    feats.sort(key=lambda f: abs(f["shap"]), reverse=True)
+    top = feats[0]
+    interp = (f"El modelo estima un Riesgo Académico {nivel}. El factor más influyente es "
+              f"{top['label']} ({top['value_fmt']}). El riesgo integra el rendimiento académico, "
+              f"las inasistencias y la probabilidad de TDAH.")
+    return {"nivel": nivel, "features": feats, "interpretacion": interp}

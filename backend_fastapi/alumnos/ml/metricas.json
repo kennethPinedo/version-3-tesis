@@ -3,22 +3,22 @@
   "n_train": 400,
   "n_val": 100,
   "train": {
-    "accuracy": 0.9075,
-    "precision_macro": 0.9005,
-    "recall_macro": 0.8863,
-    "f1_macro": 0.8912,
-    "especificidad_macro": 0.9489
+    "accuracy": 0.8875,
+    "precision_macro": 0.8705,
+    "recall_macro": 0.8468,
+    "f1_macro": 0.853,
+    "especificidad_macro": 0.9407
   },
   "val": {
-    "accuracy": 0.83,
-    "precision_macro": 0.807,
-    "recall_macro": 0.8128,
-    "f1_macro": 0.8093,
-    "especificidad_macro": 0.9136
+    "accuracy": 0.8,
+    "precision_macro": 0.7502,
+    "recall_macro": 0.7132,
+    "f1_macro": 0.7116,
+    "especificidad_macro": 0.8905
   },
   "cv": {
-    "accuracy": 0.812,
-    "accuracy_std": 0.05,
-    "recall_con_tdah": 0.9286
+    "accuracy": 0.834,
+    "accuracy_std": 0.032,
+    "recall_con_tdah": 0.902
   }
 }

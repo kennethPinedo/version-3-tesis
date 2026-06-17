@@ -19,15 +19,19 @@ import seaborn as sns
 BASE = os.path.dirname(__file__)
 df = pd.read_csv(os.path.join(BASE, "dataset_tdah_bimestral_500.csv"))
 
+# El modelo de TDAH usa SOLO los 20 ítems de la evaluación EDAH (DA + HI + TC).
+# Las inasistencias y las notas NO entran: esas alimentan el Riesgo Académico.
 columnas_omitir = [
     "ID_Alumno",
     "Nota_B1", "Nota_B2", "Nota_B3", "Nota_B4", "Promedio_Final",
-    "Estado_TDAH",
+    "Inasistencias",
+    "Nota_B1_Num", "Nota_B2_Num", "Nota_B3_Num", "Nota_B4_Num", "Promedio_Final_Num",
+    "Estado_TDAH", "Estado_Riesgo",
 ]
 X = df.drop(columns=columnas_omitir)
 y = df["Estado_TDAH"]
 
-FEATURE_NAMES = list(X.columns)  # 26 features
+FEATURE_NAMES = list(X.columns)  # 20 ítems EDAH
 print(f"Features ({len(FEATURE_NAMES)}): {FEATURE_NAMES}")
 print(f"Distribución target:\n{y.value_counts().sort_index()}\n")
 
@@ -52,6 +56,17 @@ CLASS_WEIGHT = {0: 1.0, 1: 1.3, 2: 2.0}
 sample_weight = compute_sample_weight(class_weight=CLASS_WEIGHT, y=y_train)
 print(f"Pesos por clase: {CLASS_WEIGHT}")
 
+# Pesos POR VARIABLE: el TDAH se define por Déficit de Atención (DA) e
+# Hiperactividad (HI), así que se les da más peso. La Conducta (TC) es un indicador
+# secundario/comórbido y se reduce. Orden de columnas: HI(5) + DA(5) + TC(10) = 20.
+FEATURE_WEIGHTS = np.array(
+    [3.5] * 5 +   # HI1-HI5  (Hiperactividad)  → prioridad alta
+    [3.5] * 5 +   # DA1-DA5  (Déficit de Atención) → prioridad alta
+    [0.3] * 10,   # TC1-TC10 (Conducta) → secundario (no afecta mucho al TDAH)
+    dtype=float,
+)
+assert len(FEATURE_WEIGHTS) == len(FEATURE_NAMES), "FEATURE_WEIGHTS debe tener 20 valores"
+
 modelo = XGBClassifier(
     objective="multi:softprob",
     num_class=3,
@@ -73,6 +88,7 @@ modelo = XGBClassifier(
 modelo.fit(
     X_train, y_train,
     sample_weight=sample_weight,
+    feature_weights=FEATURE_WEIGHTS,
     eval_set=[(X_val, y_val)],
     verbose=False,
 )
@@ -252,7 +268,7 @@ for tr_idx, te_idx in cv.split(X, y):
     y_tr, y_te = y.iloc[tr_idx], y.iloc[te_idx]
     sw = compute_sample_weight(class_weight=CLASS_WEIGHT, y=y_tr)
     mcv = XGBClassifier(**cv_params)
-    mcv.fit(X_tr, y_tr, sample_weight=sw, verbose=False)
+    mcv.fit(X_tr, y_tr, sample_weight=sw, feature_weights=FEATURE_WEIGHTS, verbose=False)
     pred = mcv.predict(X_te)
     accs.append(accuracy_score(y_te, pred))
     rec = recall_score(y_te, pred, average=None, labels=[0, 1, 2])

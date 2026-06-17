@@ -1,0 +1,22 @@
+{
+  "modelo": "XGBoost — Riesgo Académico",
+  "features": [
+    "Promedio_Final_Num",
+    "Inasistencias",
+    "Prob_TDAH"
+  ],
+  "train": {
+    "accuracy": 0.895,
+    "precision_macro": 0.8857,
+    "recall_macro": 0.8917,
+    "f1_macro": 0.887,
+    "especificidad_macro": 0.9498
+  },
+  "val": {
+    "accuracy": 0.84,
+    "precision_macro": 0.8363,
+    "recall_macro": 0.8472,
+    "f1_macro": 0.841,
+    "especificidad_macro": 0.9175
+  }
+}

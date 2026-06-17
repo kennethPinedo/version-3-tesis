@@ -10,7 +10,7 @@ total_alumnos = n_clase_0 + n_clase_1 + n_clase_2
 
 # Cuánto se traslapan las clases (↑ = más zona gris = métricas más bajas y realistas).
 # 1.0 da métricas creíbles (~85-93%). Súbelo a 1.3 para más dificultad, bájalo a 0.7 para menos.
-SOLAPE = 1.0
+SOLAPE = 0.70
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Utilidades
@@ -22,15 +22,22 @@ def _letra(val: float) -> str:
     return _LET[int(round(np.clip(val, 0, 3)))]
 
 def items_edah(base_hi: float, base_da: float, base_tc: float) -> dict:
-    """20 ítems EDAH alrededor de niveles base, con ruido por ítem → genera traslape."""
-    ruido = 0.60 * SOLAPE
+    """20 ítems EDAH alrededor de niveles base, con ruido por ítem → genera traslape.
+
+    El TDAH se define por Déficit de Atención (DA) e Hiperactividad (HI): por eso esos
+    ítems llevan poco ruido y mucha separación entre clases. La Conducta (TC) es un
+    indicador secundario/comórbido: lleva MÁS ruido para que separe menos y, así, el
+    modelo otorgue mayor importancia a DA e HI.
+    """
+    ruido    = 0.55 * SOLAPE   # DA / HI → señal clara
+    ruido_tc = 1.05 * SOLAPE   # TC → ruidosa, poco discriminante (secundaria)
     it = {}
     for i in range(1, 6):    # HI: ítems 01-05
         it[f"Item_{str(i).zfill(2)}"] = int(round(np.clip(base_hi + np.random.normal(0, ruido), 0, 3)))
     for i in range(6, 11):   # DA: ítems 06-10
         it[f"Item_{str(i).zfill(2)}"] = int(round(np.clip(base_da + np.random.normal(0, ruido), 0, 3)))
     for i in range(11, 21):  # TC: ítems 11-20
-        it[f"Item_{str(i).zfill(2)}"] = int(round(np.clip(base_tc + np.random.normal(0, ruido), 0, 3)))
+        it[f"Item_{str(i).zfill(2)}"] = int(round(np.clip(base_tc + np.random.normal(0, ruido_tc), 0, 3)))
     return it
 
 def notas_bimestrales(nivel: float, tendencia: float) -> list:
@@ -38,12 +45,31 @@ def notas_bimestrales(nivel: float, tendencia: float) -> list:
     ruido = 0.55 * SOLAPE
     return [_letra(nivel + b * tendencia + np.random.normal(0, ruido)) for b in range(4)]
 
+def _estado_riesgo(prom_num: float, inasist: int, estado_tdah: int) -> int:
+    """Etiqueta de RIESGO ACADÉMICO (0=Bajo, 1=Medio, 2=Alto).
+
+    Se construye a partir de: notas (histórico real de la institución),
+    inasistencias y el estado de TDAH (factor de riesgo documentado en el paper).
+    Se agrega ruido para generar traslape realista entre niveles.
+    """
+    acad = (3.0 - prom_num) / 3.0      # 0 (AD, mejor) … 1 (C, peor)  → notas (peso ALTO)
+    inas = min(inasist / 20.0, 1.0)    # 0 … 1                         → inasistencias (peso menor)
+    tdah = estado_tdah / 2.0           # 0, 0.5, 1                     → TDAH (peso ALTO)
+    score = 0.50 * acad + 0.15 * inas + 0.35 * tdah + np.random.normal(0, 0.08)
+    if score < 0.40:
+        return 0  # Bajo
+    if score < 0.66:
+        return 1  # Medio
+    return 2      # Alto
+
+
 def cerrar_alumno(a: dict, notas: list, estado: int) -> dict:
-    """Asigna B1-B4 y CALCULA Promedio_Final desde las notas (no se fija a mano)."""
+    """Asigna B1-B4, CALCULA Promedio_Final y deriva Estado_Riesgo."""
     a["Nota_B1"], a["Nota_B2"], a["Nota_B3"], a["Nota_B4"] = notas
     prom = sum(_NUM[n] for n in notas) / 4.0
     a["Promedio_Final"] = _letra(prom)
     a["Estado_TDAH"] = estado
+    a["Estado_Riesgo"] = _estado_riesgo(prom, a.get("Inasistencias", 0), estado)
     return a
 
 data = []
@@ -59,7 +85,7 @@ for _ in range(n_clase_0):
     a.update(items_edah(
         np.clip(edah_base + np.random.normal(0, 0.25), 0, 3),
         np.clip(edah_base + np.random.normal(0, 0.25), 0, 3),
-        np.clip(edah_base + np.random.normal(0, 0.20), 0, 3),
+        np.clip(0.70 + np.random.normal(0, 0.35), 0, 3),   # TC bajo (secundario)
     ))
 
     # EXCEPCIÓN 1 (15%): sano pero con bajo rendimiento (riesgo académico alto)
@@ -84,7 +110,7 @@ for _ in range(n_clase_1):
     a.update(items_edah(
         np.clip(edah_base - 0.20 + np.random.normal(0, 0.30), 0, 3),
         np.clip(edah_base + 0.30 + np.random.normal(0, 0.30), 0, 3),
-        np.clip(edah_base        + np.random.normal(0, 0.25), 0, 3),
+        np.clip(0.85 + np.random.normal(0, 0.50), 0, 3),   # TC comprimido (secundario)
     ))
 
     notas = notas_bimestrales(np.clip(np.random.normal(1.40, 0.60 * SOLAPE), 0, 3),
@@ -102,7 +128,7 @@ for _ in range(n_clase_2):
     a.update(items_edah(
         np.clip(edah_base + np.random.normal(0, 0.30), 0, 3),
         np.clip(edah_base + np.random.normal(0, 0.30), 0, 3),
-        np.clip(edah_base + np.random.normal(0, 0.25), 0, 3),
+        np.clip(1.05 + np.random.normal(0, 0.50), 0, 3),   # TC moderado, no alto (secundario)
     ))
 
     # EXCEPCIÓN 2 (10%): con TDAH pero notas excelentes (riesgo académico bajo)

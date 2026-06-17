@@ -133,7 +133,7 @@ async function req(path, options = {}) {
 
 const RIESGO_COLORS = { Alto: "#ef4444", Medio: "#f97316", Moderado: "#f97316", Bajo: "#22c55e" };
 const FACTOR_COLORS = ["#f97316", "#fb923c", "#3b82f6", "#22c55e", "#a855f7", "#14b8a6"];
-const PROB_COLORS = { "Probabilidad Alta": "#ef4444", "Probabilidad Media": "#f97316", "Probabilidad Baja": "#22c55e" };
+const PROB_COLORS = { "Sospecha Alta": "#ef4444", "Sospecha Media": "#f97316", "Sospecha Baja": "#22c55e" };
 
 // Fecha legible: "16 de junio de 2026, 14:30"
 function formatFecha(iso) {
@@ -148,9 +148,10 @@ function formatFecha(iso) {
 // Mapea la clase del modelo (Sin TDAH / Sospechoso / Con TDAH) al nivel de
 // probabilidad de TDAH que se muestra en el dashboard.
 function tdahNivelProb(nivelTdah) {
-  if (nivelTdah === "Con TDAH") return "Alta";
-  if (nivelTdah === "Sospechoso" || String(nivelTdah).startsWith("Sospechoso")) return "Media";
-  return "Baja";  // Sin TDAH (o sin dato)
+  const n = String(nivelTdah);
+  if (n.includes("Alta") || n === "Con TDAH") return "Alta";
+  if (n.includes("Media") || n.startsWith("Sospechoso")) return "Media";
+  return "Baja";  // Sospecha Baja / Sin TDAH / sin dato
 }
 
 function buildAcadPieData(nivelRiesgo, probabilidad) {
@@ -172,19 +173,19 @@ function buildTdahPieData(nivelProb, conf) {
   const top = Math.round((conf ?? 0) * 100);
   const rem = 100 - top;
   if (nivelProb === "Alta") return [
-    { name: "Probabilidad Alta",  value: top },
-    { name: "Probabilidad Media", value: Math.round(rem * 0.6) },
-    { name: "Probabilidad Baja",  value: rem - Math.round(rem * 0.6) },
+    { name: "Sospecha Alta",  value: top },
+    { name: "Sospecha Media", value: Math.round(rem * 0.6) },
+    { name: "Sospecha Baja",  value: rem - Math.round(rem * 0.6) },
   ];
   if (nivelProb === "Media") return [
-    { name: "Probabilidad Alta",  value: Math.round(rem * 0.45) },
-    { name: "Probabilidad Media", value: top },
-    { name: "Probabilidad Baja",  value: rem - Math.round(rem * 0.45) },
+    { name: "Sospecha Alta",  value: Math.round(rem * 0.45) },
+    { name: "Sospecha Media", value: top },
+    { name: "Sospecha Baja",  value: rem - Math.round(rem * 0.45) },
   ];
   return [
-    { name: "Probabilidad Alta",  value: Math.round(rem * 0.18) },
-    { name: "Probabilidad Media", value: rem - Math.round(rem * 0.18) },
-    { name: "Probabilidad Baja",  value: top },
+    { name: "Sospecha Alta",  value: Math.round(rem * 0.18) },
+    { name: "Sospecha Media", value: rem - Math.round(rem * 0.18) },
+    { name: "Sospecha Baja",  value: top },
   ];
 }
 
@@ -265,7 +266,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
   if (pred) {
     const riesgoColor = pred.nivel_riesgo === "Alto" ? "#ef4444" : pred.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e";
     const tdahLevel = pred.nivel_tdah ?? "—";
-    const esTdah = !!pred.nivel_tdah && pred.nivel_tdah !== "Sin TDAH";
+    const esTdah = !!pred.nivel_tdah && pred.nivel_tdah !== "Sospecha Baja" && pred.nivel_tdah !== "Sin TDAH";
     const tdahColor = esTdah ? "#f97316" : "#22c55e";
     const tdahConfPct = pred.confianza_tdah != null
       ? Math.round(pred.confianza_tdah * 100)
@@ -793,11 +794,11 @@ export default function App() {
             ? (dashData.nivel_riesgo === "Alto" ? "#ef4444" : dashData.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e")
             : "#94a3b8";
 
-          // Nivel de TDAH del modelo, mostrado como Probabilidad Baja/Media/Alta
+          // Nivel de TDAH del modelo, mostrado como Sospecha Baja/Media/Alta
           const tdahNivel = dashData ? tdahNivelProb(dashData.nivel_tdah) : "Baja";
-          const tdahLevel = dashData ? `Probabilidad ${tdahNivel}` : null;
+          const tdahLevel = dashData ? `Sospecha ${tdahNivel}` : null;
           const esTdahPositivo = tdahNivel !== "Baja";
-          const tdahColor = PROB_COLORS[`Probabilidad ${tdahNivel}`] ?? "#22c55e";
+          const tdahColor = PROB_COLORS[`Sospecha ${tdahNivel}`] ?? "#22c55e";
           // % junto al nivel = confianza del modelo en la clase predicha
           const tdahConf = dashData?.confianza_tdah ?? dashData?.prob_tdah ?? 0;
           const tdahConfPct = Math.round(tdahConf * 100);
@@ -1020,7 +1021,7 @@ export default function App() {
                 border: (generalFiltro?.tipo === tipo && generalFiltro?.valor === valor) ? `2px solid ${color}` : "1px solid #e2e8f0",
                 background: "#fff" }}>
               <div style={{ fontSize: "1.8rem", fontWeight: 800, color }}>{count}</div>
-              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Prob. ${valor}` : valor}</div>
+              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Sospecha ${valor}` : valor}</div>
             </div>
           );
 
@@ -1047,7 +1048,7 @@ export default function App() {
                 <div className="chart-panel">
                   <h3 className="chart-title">Probabilidad de TDAH — clic para ver alumnos</h3>
                   <div style={{ display: "flex", gap: 10 }}>
-                    {["Alta", "Media", "Baja"].map((nv) => chip(nv, tdahCount[nv], PROB_COLORS["Probabilidad " + nv], "tdah"))}
+                    {["Alta", "Media", "Baja"].map((nv) => chip(nv, tdahCount[nv], PROB_COLORS["Sospecha " + nv], "tdah"))}
                   </div>
                 </div>
               </div>
@@ -1059,7 +1060,7 @@ export default function App() {
                     <h3 style={{ margin: 0 }}>
                       {generalFiltro.tipo === "riesgo"
                         ? `Alumnos con Riesgo Académico ${generalFiltro.valor}`
-                        : `Alumnos con Probabilidad ${generalFiltro.valor} de TDAH`} ({filtrados.length})
+                        : `Alumnos con Sospecha ${generalFiltro.valor} de TDAH`} ({filtrados.length})
                     </h3>
                     <button type="button" onClick={() => setGeneralFiltro(null)} style={{ width: "auto", padding: "4px 12px" }}>Limpiar filtro</button>
                   </div>
@@ -1071,7 +1072,7 @@ export default function App() {
                           <tr key={p.id}>
                             <td>{p.alumno_nombre ?? `Alumno ${p.alumno}`}</td>
                             <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
-                            <td><b style={{ color: PROB_COLORS["Probabilidad " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b> <span style={{ color: "#94a3b8" }}>({p.nivel_tdah})</span></td>
+                            <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Sospecha {tdahNivelProb(p.nivel_tdah)}</b></td>
                             <td style={{ fontSize: "0.8rem", color: "#64748b" }}>{formatFecha(p.fecha_prediccion)}</td>
                           </tr>
                         ))}
@@ -1467,7 +1468,7 @@ export default function App() {
                   <span style={{ color: rColor, fontWeight: "bold" }}>{p.nivel_riesgo}</span>
                   {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
                   <b>Indicador TDAH (modelo IA):</b>{" "}
-                  <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sin TDAH") ? "#d62828" : "#14732b", fontWeight: "bold" }}>
+                  <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sospecha Baja" && p.nivel_tdah !== "Sin TDAH") ? "#d62828" : "#14732b", fontWeight: "bold" }}>
                     {p.nivel_tdah ?? "—"}
                   </span>
                   {p.confianza_tdah != null && (

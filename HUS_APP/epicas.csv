@@ -1,0 +1,24 @@
+﻿ID Épica;Objetivo de la Épica;ID de la Historia
+EPICA0001;Acceso e inicio de sesión;HU0001 - Inicio de sesión por rol
+;;HU0002 - Control de acceso por rol (menú)
+EPICA0002;Gestión de alumnos;HU0003 - Registrar alumno
+;;HU0004 - Listar alumnos
+;;HU0005 - Editar alumno
+;;HU0006 - Eliminar alumno
+EPICA0003;Evaluación psicoeducativa (EDAH);HU0007 - Aplicar encuesta EDAH
+;;HU0008 - Registrar inasistencias
+;;HU0009 - Ver respuestas de la encuesta
+EPICA0004;Gestión de notas;HU0010 - Registrar notas por asignatura
+;;HU0011 - Cálculo automático del promedio del bimestre
+;;HU0012 - Historial de notas del alumno
+;;HU0013 - Carga masiva de notas (CSV)
+EPICA0005;Predicción inteligente mediante IA;HU0014 - Generar predicción
+;;HU0015 - Indicador de TDAH desde el modelo
+;;HU0016 - Riesgo académico
+;;HU0017 - Explicación de la predicción (SHAP)
+;;HU0018 - Historial de predicciones
+EPICA0006;Dashboard y reportes;HU0019 - Dashboard del alumno
+;;HU0020 - Dashboard general (conteos)
+;;HU0021 - Filtros por grupo de riesgo / TDAH
+;;HU0022 - Métricas del modelo
+;;HU0023 - Expediente psicológico (PDF)
