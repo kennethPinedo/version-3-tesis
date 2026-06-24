@@ -56,10 +56,17 @@ const encuestaEscalaOpciones = [
 const encuestaLeyendaAtencion = "0: Nunca | 1: Algunas veces | 2: Bastantes veces | 3: Siempre";
 
 const ASIGNATURAS_VALIDAS = [
-  "Matemática", "Comunicación", "Ciencias Sociales", "Ciencia y Tecnología",
-  "Inglés", "Educación Física", "Arte y Cultura", "Religión",
-  "Desarrollo Personal, Ciudadanía y Cívica", "Educación para el Trabajo",
-  "Tutoría", "Ciencias Naturales",
+  "Desarrollo Personal, Ciudadanía y Cívica",
+  "Ciencias Sociales",
+  "Educación Física",
+  "Arte y Cultura",
+  "Comunicación",
+  "Inglés como Lengua Extranjera",
+  "Matemática",
+  "Ciencia y Tecnología",
+  "Educación para el Trabajo",
+  "Competencia Transversal",
+  "Formación Integral",
 ];
 
 // Usuarios y roles que pueden acceder al sistema
@@ -134,6 +141,10 @@ async function req(path, options = {}) {
 const RIESGO_COLORS = { Alto: "#ef4444", Medio: "#f97316", Moderado: "#f97316", Bajo: "#22c55e" };
 const FACTOR_COLORS = ["#f97316", "#fb923c", "#3b82f6", "#22c55e", "#a855f7", "#14b8a6"];
 const PROB_COLORS = { "Sospecha Alta": "#ef4444", "Sospecha Media": "#f97316", "Sospecha Baja": "#22c55e" };
+
+// Texto visible del indicador de TDAH: muestra "Probabilidad" en vez de "Sospecha"
+// (solo presentación; el modelo y las claves internas siguen usando "Sospecha").
+const tdahTexto = (s) => String(s ?? "—").replace("Sospecha", "Probabilidad");
 
 // Fecha legible: "16 de junio de 2026, 14:30"
 function formatFecha(iso) {
@@ -248,9 +259,25 @@ function esc(s) {
 
 const _ESCALA_TXT = { 0: "Nunca", 1: "Algunas veces", 2: "Bastantes veces", 3: "Siempre" };
 
-function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
+function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
   const fecha = new Date().toLocaleDateString("es-PE", { year: "numeric", month: "long", day: "numeric" });
   const nombre = alumno ? `${alumno.nombre} ${alumno.apellido}` : "—";
+
+  // Barras SHAP (cada factor con su peso y dirección) para el PDF.
+  const shapBarsHTML = (features) => {
+    if (!features || !features.length) return `<p class="muted">Sin factores disponibles.</p>`;
+    const maxAbs = Math.max(...features.map((f) => Math.abs(f.shap)), 0.0001);
+    return `<table class="shap">${features.map((f) => {
+      const pct = Math.max(Math.round((Math.abs(f.shap) / maxAbs) * 100), 4);
+      const up = f.shap > 0;
+      const color = up ? "#ef4444" : "#22c55e";
+      return `<tr>
+        <td class="shap-name">${esc(f.label)} <span class="muted">(${esc(f.value_fmt)})</span></td>
+        <td class="shap-bar"><span class="sbar" style="width:${pct}%;background:${color}"></span></td>
+        <td class="shap-dir" style="color:${color}">${esc(f.direccion)}</td>
+      </tr>`;
+    }).join("")}</table>`;
+  };
 
   // ── 1. Datos del alumno ──────────────────────────────────────────────────
   const datosAlumno = alumno ? `
@@ -265,7 +292,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
   let dashboardHTML;
   if (pred) {
     const riesgoColor = pred.nivel_riesgo === "Alto" ? "#ef4444" : pred.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e";
-    const tdahLevel = pred.nivel_tdah ?? "—";
+    const tdahLevel = tdahTexto(pred.nivel_tdah);
     const esTdah = !!pred.nivel_tdah && pred.nivel_tdah !== "Sospecha Baja" && pred.nivel_tdah !== "Sin TDAH";
     const tdahColor = esTdah ? "#f97316" : "#22c55e";
     const tdahConfPct = pred.confianza_tdah != null
@@ -325,7 +352,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
     prediccionHTML = `
       <table class="info">
         <tr><td class="k">Nivel de Riesgo Académico</td><td>${esc(pred.nivel_riesgo)} (${Math.round((pred.probabilidad ?? 0) * 100)}%)</td></tr>
-        <tr><td class="k">Indicador TDAH (modelo IA)</td><td>${esc(pred.nivel_tdah ?? "—")} (${tdahConfPct}% de confianza)</td></tr>
+        <tr><td class="k">Indicador TDAH (modelo IA)</td><td>${esc(tdahTexto(pred.nivel_tdah))} (${tdahConfPct}% de confianza)</td></tr>
         ${pred.referencia_psicometrica ? `<tr><td class="k">Referencia psicométrica</td><td><span class="muted">${esc(pred.referencia_psicometrica)} — no decide la clasificación</span></td></tr>` : ""}
         <tr><td class="k">Atención (DA)</td><td>${pred.da_total ?? "—"}/15</td></tr>
         <tr><td class="k">Hiperactividad (HI)</td><td>${pred.hi_total ?? "—"}/15</td></tr>
@@ -337,7 +364,12 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
         <tr><td class="k">Promedio Final</td><td>${esc(pred.promedio_final ?? pred.prediccion_notas ?? "—")} <span class="muted">(solo bimestres con nota)</span></td></tr>
         <tr><td class="k">Fecha de predicción</td><td>${esc(formatFecha(pred.fecha_prediccion))}</td></tr>
       </table>
-      <h3>Interpretación (SHAP)</h3>
+      <h3>Explicabilidad del modelo (SHAP)</h3>
+      <p class="shap-legend"><span class="dot up"></span> rojo = el factor <b>aumenta</b> el indicador &nbsp;·&nbsp; <span class="dot down"></span> verde = el factor lo <b>reduce</b></p>
+      <h4 class="shap-h tdah">Indicador de TDAH — ${esc(tdahTexto(shap?.nivel ?? pred.nivel_tdah))}</h4>
+      ${shapBarsHTML(shap?.features)}
+      <h4 class="shap-h riesgo">Riesgo Académico — ${esc(shapRiesgo?.nivel ?? pred.nivel_riesgo ?? "—")}</h4>
+      ${shapBarsHTML(shapRiesgo?.features)}
       <div class="interp">${interp}</div>`;
   } else {
     prediccionHTML = `<p class="muted">No hay predicción registrada para este estudiante.</p>`;
@@ -379,6 +411,18 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
     .block-total { color: #2563eb; font-weight: 600; }
     .inasist { margin: 8px 0 0; }
     .interp p { margin: 0 0 8px; text-align: justify; }
+    .shap-legend { font-size: 11px; color: #64748b; margin: 0 0 10px; }
+    .shap-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 2px; }
+    .shap-legend .dot.up { background: #ef4444; } .shap-legend .dot.down { background: #22c55e; }
+    h4.shap-h { font-size: 12px; margin: 12px 0 6px; padding-left: 8px; }
+    h4.shap-h.tdah { color: #6366f1; border-left: 3px solid #6366f1; }
+    h4.shap-h.riesgo { color: #0ea5e9; border-left: 3px solid #0ea5e9; }
+    table.shap { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+    table.shap td { padding: 4px 6px; vertical-align: middle; border: none; }
+    .shap-name { width: 38%; font-size: 11.5px; color: #334155; }
+    .shap-bar { width: 40%; background: #eef2f7; border-radius: 6px; }
+    .shap-bar .sbar { display: inline-block; height: 14px; border-radius: 6px; min-width: 3px; vertical-align: middle; }
+    .shap-dir { width: 22%; font-size: 11px; font-weight: 700; text-align: right; }
     .doc-foot { margin-top: 26px; border-top: 1px solid #e2e8f0; padding-top: 10px; color: #94a3b8; font-size: 11px; text-align: center; }
     @media print { body { padding: 0; } @page { margin: 1.5cm; } }`;
 
@@ -398,6 +442,35 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap }) {
   <footer class="doc-foot">Documento generado automáticamente — Sistema de Predicción Educativa</footer>
   <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},350);});</script>
 </body></html>`;
+}
+
+/* ── Visualización SHAP: cada factor como barra (peso + dirección) ───────── */
+function ShapFactores({ features }) {
+  if (!features || !features.length)
+    return <p style={{ color: "#94a3b8", fontSize: "0.84rem", fontStyle: "italic", margin: 0 }}>Sin factores disponibles.</p>;
+  const maxAbs = Math.max(...features.map((f) => Math.abs(f.shap)), 0.0001);
+  return (
+    <div style={{ marginTop: 4 }}>
+      {features.map((f) => {
+        const pct = Math.max(Math.round((Math.abs(f.shap) / maxAbs) * 100), 4);
+        const up = f.shap > 0;
+        const color = up ? "#ef4444" : "#22c55e";
+        return (
+          <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10, margin: "7px 0" }}>
+            <div style={{ width: 210, flexShrink: 0, fontSize: "0.82rem", color: "#334155" }}>
+              {f.label} <span style={{ color: "#94a3b8", fontWeight: 600 }}>({f.value_fmt})</span>
+            </div>
+            <div style={{ flex: 1, background: "#eef2f7", borderRadius: 7, height: 20, overflow: "hidden" }}>
+              <div style={{ width: `${pct}%`, background: color, height: "100%", borderRadius: 7, transition: "width .4s ease" }} />
+            </div>
+            <div style={{ width: 140, flexShrink: 0, fontSize: "0.78rem", color, fontWeight: 700, textAlign: "right" }}>
+              {f.direccion}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /* ── App ───────────────────────────────────────────────────────────────── */
@@ -684,12 +757,17 @@ export default function App() {
       ]);
       const encuesta = Array.isArray(encuestas) && encuestas.length ? encuestas[0] : null;
       const pred = Array.isArray(preds) && preds.length ? preds[0] : null;
-      const shap = pred ? await req(`/predicciones/${pred.id}/shap/`).catch(() => null) : null;
+      const [shap, shapRiesgo] = pred
+        ? await Promise.all([
+            req(`/predicciones/${pred.id}/shap/`).catch(() => null),
+            req(`/predicciones/${pred.id}/shap-riesgo/`).catch(() => null),
+          ])
+        : [null, null];
 
       const win = window.open("", "_blank");
       if (!win) return notify("Permite las ventanas emergentes para descargar el expediente.", true);
       win.document.open();
-      win.document.write(buildExpedienteHTML({ alumno, encuesta, pred, shap }));
+      win.document.write(buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }));
       win.document.close();
       notify("Expediente generado. Usa «Guardar como PDF» en el diálogo de impresión.");
     } catch (err) {
@@ -796,7 +874,7 @@ export default function App() {
 
           // Nivel de TDAH del modelo, mostrado como Sospecha Baja/Media/Alta
           const tdahNivel = dashData ? tdahNivelProb(dashData.nivel_tdah) : "Baja";
-          const tdahLevel = dashData ? `Sospecha ${tdahNivel}` : null;
+          const tdahLevel = dashData ? `Probabilidad ${tdahNivel}` : null;
           const esTdahPositivo = tdahNivel !== "Baja";
           const tdahColor = PROB_COLORS[`Sospecha ${tdahNivel}`] ?? "#22c55e";
           // % junto al nivel = confianza del modelo en la clase predicha
@@ -936,8 +1014,8 @@ export default function App() {
                               <Cell key={entry.name} fill={PROB_COLORS[entry.name]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(v) => `${v}%`} />
-                          <Legend iconType="circle" iconSize={10} />
+                          <Tooltip formatter={(v, n) => [`${v}%`, tdahTexto(n)]} />
+                          <Legend iconType="circle" iconSize={10} formatter={(value) => tdahTexto(value)} />
                         </PieChart>
                       </ResponsiveContainer>
                     </div>
@@ -1021,7 +1099,7 @@ export default function App() {
                 border: (generalFiltro?.tipo === tipo && generalFiltro?.valor === valor) ? `2px solid ${color}` : "1px solid #e2e8f0",
                 background: "#fff" }}>
               <div style={{ fontSize: "1.8rem", fontWeight: 800, color }}>{count}</div>
-              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Sospecha ${valor}` : valor}</div>
+              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Probabilidad ${valor}` : valor}</div>
             </div>
           );
 
@@ -1060,7 +1138,7 @@ export default function App() {
                     <h3 style={{ margin: 0 }}>
                       {generalFiltro.tipo === "riesgo"
                         ? `Alumnos con Riesgo Académico ${generalFiltro.valor}`
-                        : `Alumnos con Sospecha ${generalFiltro.valor} de TDAH`} ({filtrados.length})
+                        : `Alumnos con Probabilidad ${generalFiltro.valor} de TDAH`} ({filtrados.length})
                     </h3>
                     <button type="button" onClick={() => setGeneralFiltro(null)} style={{ width: "auto", padding: "4px 12px" }}>Limpiar filtro</button>
                   </div>
@@ -1072,7 +1150,7 @@ export default function App() {
                           <tr key={p.id}>
                             <td>{p.alumno_nombre ?? `Alumno ${p.alumno}`}</td>
                             <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
-                            <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Sospecha {tdahNivelProb(p.nivel_tdah)}</b></td>
+                            <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b></td>
                             <td style={{ fontSize: "0.8rem", color: "#64748b" }}>{formatFecha(p.fecha_prediccion)}</td>
                           </tr>
                         ))}
@@ -1233,7 +1311,7 @@ export default function App() {
                       <p><b>Año:</b> {a.anio_cursada}</p>
                       <p><b>Contacto:</b> {a.contacto_emergente}</p>
                       <p><b>Condición social:</b> {a.condicion_social}</p>
-                      {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "#d62828" : pred.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {pred.nivel_tdah ?? "—"}</p></>}
+                      {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "#d62828" : pred.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {tdahTexto(pred.nivel_tdah)}</p></>}
                       <button style={{ marginTop: 16 }} onClick={() => setListaVerAlumno(null)}>Cerrar</button>
                     </div>
                   </div>
@@ -1469,7 +1547,7 @@ export default function App() {
                   {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
                   <b>Indicador TDAH (modelo IA):</b>{" "}
                   <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sospecha Baja" && p.nivel_tdah !== "Sin TDAH") ? "#d62828" : "#14732b", fontWeight: "bold" }}>
-                    {p.nivel_tdah ?? "—"}
+                    {tdahTexto(p.nivel_tdah)}
                   </span>
                   {p.confianza_tdah != null && (
                     <span style={{ color: "#475569" }}> ({(p.confianza_tdah * 100).toFixed(2)}% de confianza)</span>
@@ -1495,30 +1573,65 @@ export default function App() {
                       onClick={async () => {
                         if (isShapOpen) { setShapPredId(null); setShapData(null); return; }
                         setShapLoading(true); setShapPredId(p.id); setShapData(null);
-                        try { const d = await req(`/predicciones/${p.id}/shap/`); setShapData(d); }
-                        catch { setShapData(null); }
+                        try {
+                          const [tdah, riesgo] = await Promise.all([
+                            req(`/predicciones/${p.id}/shap/`).catch(() => null),
+                            req(`/predicciones/${p.id}/shap-riesgo/`).catch(() => null),
+                          ]);
+                          setShapData({ tdah, riesgo });
+                        } catch { setShapData(null); }
                         setShapLoading(false);
                       }}
                     >
-                      {isShapOpen ? "▲ Ocultar explicación SHAP" : "▼ Explicar con SHAP"}
+                      {isShapOpen ? "▲ Ocultar explicación SHAP" : "▼ Explicar con SHAP (IA)"}
                     </button>
                   </div>
 
                   {/* Panel SHAP */}
                   {isShapOpen && (
-                    <div style={{ marginTop: 12, padding: "16px 18px", background: "#f8faff", borderRadius: 8, border: "1px solid #dbe7f3" }}>
+                    <div style={{ marginTop: 12, padding: "18px 20px", background: "#f8faff", borderRadius: 10, border: "1px solid #dbe7f3" }}>
                       {shapLoading ? (
                         <span style={{ color: "#64748b", fontSize: "0.88rem" }}>Generando explicación...</span>
-                      ) : shapData?.interpretacion ? (
+                      ) : (shapData?.tdah || shapData?.riesgo) ? (
                         <>
-                          <p style={{ margin: "0 0 10px", fontWeight: 700, color: "#1e3a5f", fontSize: "0.92rem", borderBottom: "1px solid #dbe7f3", paddingBottom: 8 }}>
-                            Explicación de la predicción
+                          <p style={{ margin: "0 0 4px", fontWeight: 800, color: "#1e3a5f", fontSize: "1rem" }}>
+                            🧠 ¿Por qué el modelo predijo esto?
                           </p>
-                          <div style={{ color: "#374151", fontSize: "0.88rem", lineHeight: 1.75 }}>
-                            {shapData.interpretacion.split("\n\n").map((para, i) => (
-                              <p key={i} style={{ margin: i < shapData.interpretacion.split("\n\n").length - 1 ? "0 0 10px" : 0 }}>{para}</p>
-                            ))}
-                          </div>
+                          <p style={{ margin: "0 0 16px", color: "#64748b", fontSize: "0.78rem" }}>
+                            Cada barra muestra cuánto influyó cada factor.{" "}
+                            <span style={{ color: "#ef4444", fontWeight: 700 }}>● rojo = aumenta</span>{"  ·  "}
+                            <span style={{ color: "#22c55e", fontWeight: 700 }}>● verde = reduce</span>
+                          </p>
+
+                          {shapData?.tdah && (
+                            <div style={{ marginBottom: 16 }}>
+                              <p style={{ margin: "0 0 8px", fontWeight: 700, color: "#6366f1", fontSize: "0.88rem", borderLeft: "3px solid #6366f1", paddingLeft: 8 }}>
+                                Indicador de TDAH — {shapData.tdah.nivel}
+                              </p>
+                              <ShapFactores features={shapData.tdah.features} />
+                              {shapData.tdah.interpretacion && (
+                                <div style={{ marginTop: 10, color: "#475569", fontSize: "0.84rem", lineHeight: 1.7, background: "#fff", borderRadius: 8, padding: "10px 12px", border: "1px solid #eef2f7" }}>
+                                  {shapData.tdah.interpretacion.split("\n\n").map((para, i) => (
+                                    <p key={i} style={{ margin: i === 0 ? "0 0 8px" : 0 }}>{para}</p>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {shapData?.riesgo && (
+                            <div style={{ borderTop: "1px dashed #cbd5e1", paddingTop: 14 }}>
+                              <p style={{ margin: "0 0 8px", fontWeight: 700, color: "#0ea5e9", fontSize: "0.88rem", borderLeft: "3px solid #0ea5e9", paddingLeft: 8 }}>
+                                Riesgo Académico — {shapData.riesgo.nivel}
+                              </p>
+                              <ShapFactores features={shapData.riesgo.features} />
+                              {shapData.riesgo.interpretacion && (
+                                <div style={{ marginTop: 10, color: "#475569", fontSize: "0.84rem", lineHeight: 1.7, background: "#fff", borderRadius: 8, padding: "10px 12px", border: "1px solid #eef2f7" }}>
+                                  <p style={{ margin: 0 }}>{shapData.riesgo.interpretacion}</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </>
                       ) : (
                         <span style={{ color: "#d62828", fontSize: "0.88rem" }}>No se pudo obtener la explicación.</span>

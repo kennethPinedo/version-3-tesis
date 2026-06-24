@@ -81,15 +81,18 @@ def obtener_shap(datos: dict, nivel_tdah: str, prob_tdah: float = 0.0) -> dict:
     class_idx = _CLASE_IDX.get(nivel_tdah, 0)
     ev        = _explainer.expected_value
 
-    if isinstance(shap_vals, list):
-        sv   = shap_vals[class_idx][0]
-        base = float(ev[class_idx]) if hasattr(ev, "__len__") else float(ev)
-    elif shap_vals.ndim == 3:
-        sv   = shap_vals[0, :, class_idx]
-        base = float(ev[class_idx]) if hasattr(ev, "__len__") else float(ev)
-    else:
-        sv   = shap_vals[0]
-        base = float(ev[class_idx]) if hasattr(ev, "__len__") else float(ev)
+    # Explicar sobre el EJE "tendencia a TDAH" = contribución a NO ser «Sospecha Baja»
+    # (= -SHAP de la clase 0). Así un valor alto en DA/HI se muestra SIEMPRE como
+    # "aumenta TDAH" y uno bajo como "reduce" (intuitivo para el psicólogo), evitando
+    # los signos confusos del SHAP de una sola clase en modelos multiclase.
+    def _sv(ci):
+        if isinstance(shap_vals, list):
+            return np.asarray(shap_vals[ci][0], dtype=float)
+        if getattr(shap_vals, "ndim", 0) == 3:
+            return np.asarray(shap_vals[0, :, ci], dtype=float)
+        return np.asarray(shap_vals[0], dtype=float)
+    sv   = -_sv(0)
+    base = float(ev[class_idx]) if hasattr(ev, "__len__") else float(ev)
 
     hi_total = sum(datos[f"HI{i}"] for i in range(1, 6))
     da_total = sum(datos[f"DA{i}"] for i in range(1, 6))
@@ -197,13 +200,16 @@ def obtener_shap_riesgo(promedio_num: float, inasistencias: int, prob_tdah: floa
     pf = float(promedio_num) if tiene_notas else float("nan")
     X  = np.array([[pf, float(inasistencias), float(prob_tdah)]])
     sv = _explainer_riesgo.shap_values(X)
-    idx = _RIESGO_IDX.get(nivel, 0)
-    if isinstance(sv, list):
-        s = sv[idx][0]
-    elif sv.ndim == 3:
-        s = sv[0, :, idx]
-    else:
-        s = sv[0]
+    # Explicar sobre el EJE de RIESGO = contribución a NO ser «Bajo» (= -SHAP de la
+    # clase 0). Así un factor que eleva el riesgo (peores notas, más faltas, más TDAH)
+    # se muestra SIEMPRE como "aumenta riesgo", coherente con el indicador e intuitivo.
+    def _s(ci):
+        if isinstance(sv, list):
+            return np.asarray(sv[ci][0], dtype=float)
+        if getattr(sv, "ndim", 0) == 3:
+            return np.asarray(sv[0, :, ci], dtype=float)
+        return np.asarray(sv[0], dtype=float)
+    s = -_s(0)
 
     labels = {"Promedio_Final_Num": "Rendimiento (notas)", "Inasistencias": "Inasistencias",
               "Prob_TDAH": "Probabilidad de TDAH"}

@@ -1,0 +1,40 @@
+{
+  "n": 15,
+  "accuracy": 0.8667,
+  "matriz_confusion": {
+    "clases": [
+      "Bajo",
+      "Medio",
+      "Alto"
+    ],
+    "matriz": [
+      [
+        11,
+        0,
+        0
+      ],
+      [
+        2,
+        2,
+        0
+      ],
+      [
+        0,
+        0,
+        0
+      ]
+    ]
+  },
+  "por_clase": {
+    "Bajo": {
+      "precision": 0.8462,
+      "recall": 1.0,
+      "f1-score": 0.9167
+    },
+    "Medio": {
+      "precision": 1.0,
+      "recall": 0.5,
+      "f1-score": 0.6667
+    }
+  }
+}
