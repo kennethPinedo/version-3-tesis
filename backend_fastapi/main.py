@@ -37,9 +37,12 @@ _extra = os.getenv("CORS_ORIGINS", "")
 if _extra:
     _origins += [o.strip() for o in _extra.split(",") if o.strip()]
 
+# allow_origin_regex acepta cualquier subdominio de Vercel (producción y previews,
+# cuya URL cambia en cada despliegue). Se puede afinar con la variable CORS_ORIGIN_REGEX.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
+    allow_origin_regex=os.getenv("CORS_ORIGIN_REGEX", r"https://.*\.vercel\.app"),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
