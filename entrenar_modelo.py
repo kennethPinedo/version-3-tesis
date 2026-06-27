@@ -105,7 +105,7 @@ print(f"\nAccuracy  Train: {acc_tr:.4f}  Val: {acc_va:.4f}  (brecha: {acc_tr - a
 print("\n--- Reporte en Validación ---")
 print(classification_report(
     y_val, modelo.predict(X_val),
-    target_names=["Sin TDAH", "Sospechoso", "Con TDAH"],
+    target_names=["Probabilidad Baja", "Probabilidad Media", "Probabilidad Alta"],
 ))
 
 print("Importancia de features (gain):")
@@ -117,7 +117,7 @@ for feat, imp in sorted(zip(FEATURE_NAMES, modelo.feature_importances_), key=lam
 # ==============================================================================
 # Comparar Train con Val por clase permite ver el sobreajuste de un vistazo: si
 # las barras de Train y Val quedan cercanas, el modelo generaliza (no memoriza).
-CLASES = ["Sin TDAH", "Sospechoso", "Con TDAH"]
+CLASES = ["Probabilidad Baja", "Probabilidad Media", "Probabilidad Alta"]
 
 y_pred_train = modelo.predict(X_train)
 y_pred_val   = modelo.predict(X_val)

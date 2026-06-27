@@ -4,14 +4,21 @@ import {
   Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 
-const API = "http://127.0.0.1:8000/api";
+// URL del backend: configurable por variable de entorno (VITE_API_URL) para el
+// despliegue; si no está definida, usa el backend local (desarrollo).
+const API = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000") + "/api";
 const views = ["dashboard", "general", "alumno", "lista", "encuesta", "predicciones", "notas", "expediente"];
 
-// Qué vistas puede ver cada rol (el docente no accede al expediente psicológico)
+// Restricciones de acceso por rol (basadas en confidencialidad clínica):
+//  - Psicólogo: acceso clínico COMPLETO (aplica EDAH, predice, ve SHAP y expediente).
+//  - Docente: solo lo ACADÉMICO (panorama general, lista e ingreso de notas).
+//             No accede a la encuesta EDAH, predicciones detalladas ni expediente.
+//  - Director: solo SUPERVISIÓN/lectura (dashboards y lista). No ingresa datos
+//              clínicos ni notas, ni accede al expediente psicológico confidencial.
 const VIEWS_POR_ROL = {
   "Administrador": views,
-  "Psicólogo": views,
-  "Docente": ["dashboard", "general", "alumno", "lista", "encuesta", "predicciones", "notas"],
+  "Psicólogo":     views,
+  "Docente":       ["dashboard", "general", "lista", "notas"],
 };
 const encuestaKeys = [
   "DA1", "DA2", "DA3", "DA4", "DA5",
@@ -69,7 +76,7 @@ const ASIGNATURAS_VALIDAS = [
   "Formación Integral",
 ];
 
-// Usuarios y roles que pueden acceder al sistema
+// Usuarios y roles que pueden acceder al sistema (Director / Psicólogo / Docente)
 const USUARIOS = {
   admin:     { password: "admin123",   rol: "Administrador" },
   psicologo: { password: "psico123",   rol: "Psicólogo" },
@@ -517,6 +524,9 @@ export default function App() {
   const [encuestaRespuestas, setEncuestaRespuestas] = useState([]);
 
   const goToView = (v) => {
+    // Control de acceso: el rol no puede navegar a vistas que no tiene permitidas.
+    const permitidas = VIEWS_POR_ROL[auth.rol] ?? views;
+    if (!permitidas.includes(v)) return;
     setActiveView(v);
     setStatus({ msg: "", error: false });
     setAlumnoFormError("");
@@ -529,6 +539,12 @@ export default function App() {
     if (v === "lista") loadTodosPredicciones();
     if (v === "general") { loadTodosPredicciones(); loadMetricas(); }
   };
+
+  // Seguridad: si el rol activo no tiene permiso para la vista actual, vuelve al dashboard.
+  useEffect(() => {
+    const permitidas = VIEWS_POR_ROL[auth.rol] ?? views;
+    if (auth.logged && !permitidas.includes(activeView)) setActiveView("dashboard");
+  }, [activeView, auth.rol, auth.logged]);
 
   async function loadMetricas() {
     try { setMetricas(await req("/metricas/")); } catch { setMetricas(null); }
@@ -805,9 +821,9 @@ export default function App() {
           </form>
           <div style={{ fontSize: "0.78rem", color: "#64748b", marginTop: 6, lineHeight: 1.7 }}>
             <div><strong>Accesos:</strong></div>
-            <div>👤 Administrador — <strong>admin</strong> / admin123</div>
-            <div>🧠 Psicólogo — <strong>psicologo</strong> / psico123</div>
-            <div>📚 Docente — <strong>docente</strong> / docente123</div>
+            <div>👤 Administrador — <strong>admin</strong> / admin123 <em>(acceso completo)</em></div>
+            <div>🧠 Psicólogo — <strong>psicologo</strong> / psico123 <em>(clínico completo)</em></div>
+            <div>📚 Docente — <strong>docente</strong> / docente123 <em>(académico)</em></div>
           </div>
           {status.msg && <p className="status" style={{ color: status.error ? "#d62828" : "#14732b" }}>{status.msg}</p>}
         </section>
@@ -838,7 +854,7 @@ export default function App() {
           <span className="sidebar-logo">📖</span>
           <div>
             <h2>Sistema</h2>
-            <span>{auth.rol || "admin"}</span>
+            <span>{auth.rol || "Usuario"}</span>
           </div>
         </div>
         <nav>

@@ -10,11 +10,11 @@ class Alumno(Base):
     nombre = Column(String(100), nullable=False)
     apellido = Column(String(100), nullable=False)
     edad = Column(Integer, nullable=False)
-    grado = Column(String(10), nullable=False)
+    grado = Column(String(50), nullable=False)
     anio_cursada = Column(Integer, default=2024)
-    contacto_emergente = Column(String(20), nullable=False)
-    condicion_social = Column(String(10), default="NINGUNA")
-    genero = Column(String(20), default="No especificado")
+    contacto_emergente = Column(String(100), nullable=False)
+    condicion_social = Column(String(50), default="NINGUNA")
+    genero = Column(String(30), default="No especificado")
 
 
 class Encuesta(Base):
