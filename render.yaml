@@ -1,0 +1,26 @@
+# Blueprint de despliegue del BACKEND en Render.
+#
+# Uso: en Render → New → Blueprint → conecta este repositorio. Render lee este
+# archivo y crea el servicio. Las variables marcadas con `sync: false` NO se
+# suben al repositorio: se completan a mano en el panel de Render.
+services:
+  - type: web
+    name: tesis-api
+    runtime: python
+    plan: free
+    rootDir: backend_fastapi
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # Render inyecta el puerto en $PORT; hay que escuchar en 0.0.0.0.
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      # Debe coincidir con backend_fastapi/runtime.txt
+      - key: PYTHON_VERSION
+        value: 3.13.4
+      # Cadena de conexión de Neon (PostgreSQL). Se completa en el panel.
+      - key: DATABASE_URL
+        sync: false
+      # Dominio(s) del frontend en Vercel, separados por coma.
+      # Ej: https://tesis-tdah.vercel.app
+      - key: CORS_ORIGINS
+        sync: false

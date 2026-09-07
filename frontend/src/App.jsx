@@ -4,22 +4,17 @@ import {
   Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 
-// URL del backend: configurable por variable de entorno (VITE_API_URL) para el
-// despliegue; si no está definida, usa el backend local (desarrollo).
-const API = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000") + "/api";
-const views = ["dashboard", "general", "alumno", "lista", "encuesta", "predicciones", "notas", "expediente"];
+import { req } from "./lib/api";
+import { NAV_LABELS, puedeGestionarAlumnos, puedeVer, viewsDeRol, vistaInicial } from "./lib/rbac";
+import {
+  FILTROS_INICIALES, PROB_COLORS, RIESGO_COLORS, contarPorGrupo, filtrarPredicciones,
+  formatFecha, hayFiltroActivo, tdahNivelProb, tdahTexto, ultimaPorAlumno,
+} from "./lib/predicciones";
+import FiltrosPrediccion from "./components/FiltrosPrediccion";
+import RecomendacionesPanel from "./components/RecomendacionesPanel";
+import CargaMasivaNotas from "./components/CargaMasivaNotas";
+import InasistenciasView from "./views/InasistenciasView";
 
-// Restricciones de acceso por rol (basadas en confidencialidad clínica):
-//  - Psicólogo: acceso clínico COMPLETO (aplica EDAH, predice, ve SHAP y expediente).
-//  - Docente: solo lo ACADÉMICO (panorama general, lista e ingreso de notas).
-//             No accede a la encuesta EDAH, predicciones detalladas ni expediente.
-//  - Director: solo SUPERVISIÓN/lectura (dashboards y lista). No ingresa datos
-//              clínicos ni notas, ni accede al expediente psicológico confidencial.
-const VIEWS_POR_ROL = {
-  "Administrador": views,
-  "Psicólogo":     views,
-  "Docente":       ["dashboard", "general", "lista", "notas"],
-};
 const encuestaKeys = [
   "DA1", "DA2", "DA3", "DA4", "DA5",
   "HI1", "HI2", "HI3", "HI4", "HI5",
@@ -103,74 +98,17 @@ function promedioLiteral(literales) {
   return { num: Math.round(num * 100) / 100, letra: NOTA_LET[Math.round(num)] };
 }
 
-const evalSocialLabels = {
-  c1: "C1: Asistencia y Participación Familiar",
-  c2: "C2: Estabilidad Familiar",
-  c3: "C3: Soporte Académico",
-  c4: "C4: Cuidado y Atención",
-  c5: "C5: Integración de Pares",
-  c6: "C6: Riesgo de Aislamiento",
-  c7: "C7: Conducta Prosocial",
-  c8: "C8: Vulnerabilidad Social",
-};
-
-const socialSelectOptions = [
-  { value: "0", label: "0 - Ningún Problema" },
-  { value: "1", label: "1 - Leve" },
-  { value: "2", label: "2 - Moderado" },
-  { value: "3", label: "3 - Grave" },
-];
-
 const initialAlumno = {
   nombre: "", apellido: "", contacto_emergente: "", edad: "", grado: "",
   anio_cursada: "2025", genero: "",
 };
 
-const initialEncuesta = Object.fromEntries([["alumno", ""], ["inasistencias", "0"], ...encuestaKeys.map((k) => [k, "0"])]);
+const initialEncuesta = Object.fromEntries([["alumno", ""], ...encuestaKeys.map((k) => [k, "0"])]);
 const initialNota = { alumno: "", bimestre: "1" };
-
-function socialToCondicion(maxSocial) {
-  if (maxSocial <= 0) return "NINGUNA";
-  if (maxSocial === 1) return "LEVE";
-  if (maxSocial === 2) return "MODERADA";
-  return "GRAVE";
-}
-
-async function req(path, options = {}) {
-  const res = await fetch(`${API}${path}`, { cache: "no-store", ...options });
-  if (!res.ok) throw new Error(await res.text());
-  if (res.status === 204) return null;
-  return res.json();
-}
 
 /* ── Chart & dashboard helpers ─────────────────────────────────────────── */
 
-const RIESGO_COLORS = { Alto: "#ef4444", Medio: "#f97316", Moderado: "#f97316", Bajo: "#22c55e" };
 const FACTOR_COLORS = ["#f97316", "#fb923c", "#3b82f6", "#22c55e", "#a855f7", "#14b8a6"];
-const PROB_COLORS = { "Sospecha Alta": "#ef4444", "Sospecha Media": "#f97316", "Sospecha Baja": "#22c55e" };
-
-// Texto visible del indicador de TDAH: muestra "Probabilidad" en vez de "Sospecha"
-// (solo presentación; el modelo y las claves internas siguen usando "Sospecha").
-const tdahTexto = (s) => String(s ?? "—").replace("Sospecha", "Probabilidad");
-
-// Fecha legible: "16 de junio de 2026, 14:30"
-function formatFecha(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString("es-PE", {
-    year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit",
-  });
-}
-
-// Mapea la clase del modelo (Sin TDAH / Sospechoso / Con TDAH) al nivel de
-// probabilidad de TDAH que se muestra en el dashboard.
-function tdahNivelProb(nivelTdah) {
-  const n = String(nivelTdah);
-  if (n.includes("Alta") || n === "Con TDAH") return "Alta";
-  if (n.includes("Media") || n.startsWith("Sospechoso")) return "Media";
-  return "Baja";  // Sospecha Baja / Sin TDAH / sin dato
-}
 
 function buildAcadPieData(nivelRiesgo, probabilidad) {
   // Dona invertida (medidor de seguridad): el verde ("Bajo") es la parte SIN
@@ -207,55 +145,17 @@ function buildTdahPieData(nivelProb, conf) {
   ];
 }
 
-function parseSocialPct(condStr) {
-  const m = condStr.match(/Condici[^\s:]+n social[:\s]+(\w+)/i);
-  const val = m ? m[1].toUpperCase() : "NINGUNA";
-  return { NINGUNA: 0, LEVE: 25, MODERADA: 60, GRAVE: 90 }[val] ?? 20;
-}
-
 function buildFactoresData(pred) {
+  // El promedio se expresa en la escala literal 0-3 (C=0 … AD=3): el déficit
+  // académico es (3 - promedio) / 3, no (20 - promedio) / 20.
+  const deficitAcademico = Math.max(0, Math.min(100,
+    Math.round(((3 - (pred.promedio_notas ?? 0)) / 3) * 100)));
   return [
     { name: "Inatención", valor: Math.round((pred.total_atencion / 15) * 100) },
     { name: "Hiperactividad", valor: Math.round((pred.total_hiperactividad / 15) * 100) },
-    { name: "Rend. Académico", valor: Math.round(((20 - (pred.promedio_notas || 0)) / 20) * 100) },
+    { name: "Rend. Académico", valor: deficitAcademico },
     { name: "Inasistencias", valor: Math.min(100, Math.round(((pred.inasistencias ?? 0) / 20) * 100)) },
   ].sort((a, b) => b.valor - a.valor);
-}
-
-function deriveTdahLevel(nivelTdah) {
-  if (!nivelTdah) return "Bajo";
-  if (nivelTdah === "Posible TDAH") return "Moderado";
-  return "Bajo";
-}
-
-function interpretacionTdah(nivelTdah) {
-  if (nivelTdah === "Posible TDAH") {
-    return "Se identifican indicadores compatibles con posible TDAH (DA > 10 o HI > 10). Se recomienda evaluación diagnóstica especializada.";
-  }
-  return "No se identifican indicadores significativos de TDAH (DA ≤ 10 y HI ≤ 10).";
-}
-
-function generarRecomendaciones(pred) {
-  const recs = [];
-  if (pred.total_atencion >= 11) {
-    recs.push({ icon: "📚", text: "Refuerzo en técnicas de atención y concentración.", priority: "alta", priorityLabel: "Prioridad alta" });
-    recs.push({ icon: "👤", text: "Seguimiento psicopedagógico individual.", priority: "alta", priorityLabel: "Prioridad alta" });
-  }
-  if (pred.total_hiperactividad >= 11) {
-    recs.push({ icon: "👥", text: "Talleres de manejo de impulsos y autorregulación.", priority: "media", priorityLabel: "Prioridad media" });
-  }
-  if (pred.nivel_riesgo === "Alto") {
-    recs.push({ icon: "📊", text: "Monitoreo continuo del rendimiento académico.", priority: "baja", priorityLabel: "Prioridad baja" });
-    recs.push({ icon: "🏠", text: "Coordinación con familia para apoyo escolar.", priority: "alta", priorityLabel: "Prioridad alta" });
-  } else if (pred.nivel_riesgo === "Medio") {
-    recs.push({ icon: "📊", text: "Monitoreo periódico del rendimiento académico.", priority: "media", priorityLabel: "Prioridad media" });
-  } else {
-    recs.push({ icon: "✅", text: "Continuar con las actividades regulares.", priority: "baja", priorityLabel: "Prioridad baja" });
-  }
-  if (recs.length === 0) {
-    recs.push({ icon: "📋", text: "Evaluar con más datos para generar recomendaciones.", priority: "baja", priorityLabel: "Prioridad baja" });
-  }
-  return recs.slice(0, 5);
 }
 
 /* ── Expediente (reporte descargable) ──────────────────────────────────── */
@@ -266,7 +166,7 @@ function esc(s) {
 
 const _ESCALA_TXT = { 0: "Nunca", 1: "Algunas veces", 2: "Bastantes veces", 3: "Siempre" };
 
-function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
+function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomendaciones }) {
   const fecha = new Date().toLocaleDateString("es-PE", { year: "numeric", month: "long", day: "numeric" });
   const nombre = alumno ? `${alumno.nombre} ${alumno.apellido}` : "—";
 
@@ -292,7 +192,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
       <tr><td class="k">Nombre</td><td>${esc(nombre)}</td><td class="k">ID</td><td>${String(alumno.id).padStart(3, "0")}</td></tr>
       <tr><td class="k">Grado</td><td>${esc(alumno.grado)}</td><td class="k">Edad</td><td>${esc(alumno.edad)}</td></tr>
       <tr><td class="k">Género</td><td>${esc(alumno.genero)}</td><td class="k">Año de cursada</td><td>${esc(alumno.anio_cursada)}</td></tr>
-      <tr><td class="k">Contacto</td><td>${esc(alumno.contacto_emergente)}</td><td class="k">Condición social</td><td>${esc(alumno.condicion_social)}</td></tr>
+      <tr><td class="k">Contacto</td><td>${esc(alumno.contacto_emergente)}</td><td class="k">Inasistencias</td><td>${esc(pred?.inasistencias ?? alumno.inasistencias ?? 0)} día(s)</td></tr>
     </table>` : `<p class="muted">Datos del alumno no disponibles.</p>`;
 
   // ── 2. Dashboard ─────────────────────────────────────────────────────────
@@ -310,7 +210,6 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
       : rendLetra === "B" ? "#f97316"
       : rendLetra === "C" ? "#ef4444" : "#94a3b8";
     const factores = buildFactoresData(pred);
-    const recs = generarRecomendaciones(pred);
 
     dashboardHTML = `
       <div class="kpis">
@@ -322,10 +221,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
       <table class="bars">
         ${factores.map((f) => `<tr><td class="bar-name">${esc(f.name)}</td><td class="bar-cell"><span class="bar" style="width:${f.valor}%"></span></td><td class="bar-val">${f.valor}%</td></tr>`).join("")}
       </table>
-      <h3>Recomendaciones generadas</h3>
-      <ul class="recs">
-        ${recs.map((r) => `<li><span>${r.icon} ${esc(r.text)}</span><span class="tag tag-${r.priority}">${esc(r.priorityLabel)}</span></li>`).join("")}
-      </ul>`;
+      `;
   } else {
     dashboardHTML = `<p class="muted">No hay predicción registrada. Genera una predicción para incluir el resumen del dashboard.</p>`;
   }
@@ -343,8 +239,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
     encuestaHTML =
       bloque("Déficit de Atención (DA)", encuestaKeysDA, suma(encuestaKeysDA), 15) +
       bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, suma(encuestaKeysHI), 15) +
-      bloque("Trastorno de Conducta (TC)", encuestaKeysTC, suma(encuestaKeysTC), 30) +
-      `<p class="inasist"><b>Inasistencias:</b> ${encuesta.inasistencias ?? 0} día(s)</p>`;
+      bloque("Trastorno de Conducta (TC)", encuestaKeysTC, suma(encuestaKeysTC), 30);
   } else {
     encuestaHTML = `<p class="muted">No hay encuesta registrada para este estudiante.</p>`;
   }
@@ -381,6 +276,23 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
   } else {
     prediccionHTML = `<p class="muted">No hay predicción registrada para este estudiante.</p>`;
   }
+
+  // ── 5. Plan de acción (analítica prescriptiva, resuelta en el backend) ──
+  const listaRecs = recomendaciones?.recomendaciones ?? [];
+  const recomendacionesHTML = listaRecs.length
+    ? `<ul class="recs">
+        ${listaRecs.map((r) => `
+          <li>
+            <div class="rec-head">
+              <span class="rec-title">${r.icono} ${esc(r.titulo)}</span>
+              <span class="tag tag-${r.prioridad === "critica" ? "alta" : r.prioridad}">${esc(r.prioridad_label)}</span>
+            </div>
+            <div class="rec-meta">Regla: ${esc(r.regla)} · Responsable: ${esc(r.responsable)}</div>
+            <ul class="rec-acciones">${(r.acciones ?? []).map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
+          </li>`).join("")}
+      </ul>
+      ${recomendaciones?.aviso ? `<p class="aviso"><b>Aviso:</b> ${esc(recomendaciones.aviso)}</p>` : ""}`
+    : `<p class="muted">No hay un plan de acción disponible para este estudiante.</p>`;
 
   const styles = `
     * { box-sizing: border-box; }
@@ -431,7 +343,26 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
     .shap-bar .sbar { display: inline-block; height: 14px; border-radius: 6px; min-width: 3px; vertical-align: middle; }
     .shap-dir { width: 22%; font-size: 11px; font-weight: 700; text-align: right; }
     .doc-foot { margin-top: 26px; border-top: 1px solid #e2e8f0; padding-top: 10px; color: #94a3b8; font-size: 11px; text-align: center; }
-    @media print { body { padding: 0; } @page { margin: 1.5cm; } }`;
+    ul.recs li { display: block; }
+    .rec-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .rec-title { font-weight: 700; color: #1e3a5f; }
+    .rec-meta { color: #94a3b8; font-size: 10.5px; margin: 3px 0 5px; }
+    ul.rec-acciones { margin: 0; padding-left: 18px; color: #475569; }
+    ul.rec-acciones li { display: list-item; border: none; padding: 1px 0; margin: 0; }
+    .aviso { margin-top: 12px; padding: 8px 10px; background: #fffbeb; border: 1px solid #fde68a;
+             border-radius: 6px; color: #92400e; font-size: 10.5px; line-height: 1.6; }
+    /* Impresión: evita cortes a mitad de tabla/recomendación y repite cabeceras. */
+    @media print {
+      body { padding: 0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      @page { margin: 1.5cm; size: A4; }
+      section { break-inside: avoid; page-break-inside: avoid; }
+      h2, h3, h4 { break-after: avoid; page-break-after: avoid; }
+      table { break-inside: auto; }
+      tr { break-inside: avoid; page-break-inside: avoid; }
+      thead { display: table-header-group; }
+      ul.recs li { break-inside: avoid; page-break-inside: avoid; }
+      .doc-foot { position: fixed; bottom: 0; left: 0; right: 0; }
+    }`;
 
   return `<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
@@ -446,6 +377,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }) {
   <section><h2>2. Resumen del Dashboard</h2>${dashboardHTML}</section>
   <section><h2>3. Encuesta Psicoeducativa (EDAH)</h2>${encuestaHTML}</section>
   <section><h2>4. Predicción Académica</h2>${prediccionHTML}</section>
+  <section><h2>5. Plan de Acción (analítica prescriptiva)</h2>${recomendacionesHTML}</section>
   <footer class="doc-foot">Documento generado automáticamente — Sistema de Predicción Educativa</footer>
   <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},350);});</script>
 </body></html>`;
@@ -506,7 +438,7 @@ export default function App() {
   const [notasModoCarga, setNotasModoCarga] = useState("individual");
   const [notasStatus, setNotasStatus] = useState({ msg: "", error: false });
   const [historicoNotas, setHistoricoNotas] = useState([]);
-  const [archivoMasivo, setArchivoMasivo] = useState(null);
+
 
   // Dashboard states
   const [dashAlumno, setDashAlumno] = useState("");
@@ -518,15 +450,15 @@ export default function App() {
 
   // Dashboard general + métricas + encuesta (ver respuestas)
   const [metricas, setMetricas] = useState(null);
-  const [generalFiltro, setGeneralFiltro] = useState(null);   // { tipo: "riesgo"|"tdah", valor }
+  // Filtros cruzados (TDAH AND riesgo) del Dashboard General.
+  const [filtrosGeneral, setFiltrosGeneral] = useState({ ...FILTROS_INICIALES });
   const [encuestaModo, setEncuestaModo] = useState("registrar");  // registrar | respuestas
   const [encuestaVerAlumno, setEncuestaVerAlumno] = useState("");
   const [encuestaRespuestas, setEncuestaRespuestas] = useState([]);
 
   const goToView = (v) => {
     // Control de acceso: el rol no puede navegar a vistas que no tiene permitidas.
-    const permitidas = VIEWS_POR_ROL[auth.rol] ?? views;
-    if (!permitidas.includes(v)) return;
+    if (!puedeVer(auth.rol, v)) return;
     setActiveView(v);
     setStatus({ msg: "", error: false });
     setAlumnoFormError("");
@@ -535,15 +467,15 @@ export default function App() {
     setListaStatus({ msg: "", error: false });
     setListaVerAlumno(null);
     setListaEditAlumno(null);
-    setGeneralFiltro(null);
+    setFiltrosGeneral({ ...FILTROS_INICIALES });
     if (v === "lista") loadTodosPredicciones();
     if (v === "general") { loadTodosPredicciones(); loadMetricas(); }
   };
 
-  // Seguridad: si el rol activo no tiene permiso para la vista actual, vuelve al dashboard.
+  // Seguridad: si el rol activo no tiene permiso para la vista actual, se le
+  // devuelve a la primera vista que sí tiene permitida.
   useEffect(() => {
-    const permitidas = VIEWS_POR_ROL[auth.rol] ?? views;
-    if (auth.logged && !permitidas.includes(activeView)) setActiveView("dashboard");
+    if (auth.logged && !puedeVer(auth.rol, activeView)) setActiveView(vistaInicial(auth.rol));
   }, [activeView, auth.rol, auth.logged]);
 
   async function loadMetricas() {
@@ -636,6 +568,7 @@ export default function App() {
     const u = USUARIOS[auth.usuario.trim().toLowerCase()];
     if (u && u.password === auth.password) {
       setAuth((s) => ({ ...s, logged: true, rol: u.rol }));
+      setActiveView(vistaInicial(u.rol));
       notify(`Sesión iniciada como ${u.rol}.`);
     } else {
       notify("Credenciales inválidas.", true);
@@ -649,7 +582,6 @@ export default function App() {
       nombre: alumnoForm.nombre, apellido: alumnoForm.apellido,
       contacto_emergente: alumnoForm.contacto_emergente, edad: Number(alumnoForm.edad),
       grado: alumnoForm.grado, anio_cursada: Number(alumnoForm.anio_cursada),
-      condicion_social: "NINGUNA",
       genero: alumnoForm.genero || "No especificado",
     };
     try {
@@ -665,7 +597,7 @@ export default function App() {
   const submitEncuesta = async (e) => {
     e.preventDefault();
     setEncuestaStatus({ msg: "", error: false });
-    const body = { alumno: Number(encuestaForm.alumno), inasistencias: Number(encuestaForm.inasistencias ?? 0) };
+    const body = { alumno: Number(encuestaForm.alumno) };
     encuestaKeys.forEach((k) => { body[k] = Number(encuestaForm[k]); });
     try {
       await req("/encuestas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -728,41 +660,6 @@ export default function App() {
     }
   };
 
-  const submitMasivaCsv = async (e) => {
-    e.preventDefault();
-    setNotasStatus({ msg: "", error: false });
-    if (!archivoMasivo) { setNotasStatus({ msg: "Selecciona un archivo CSV.", error: true }); return; }
-    const text = await archivoMasivo.text();
-    const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-    if (lines.length < 2) { setNotasStatus({ msg: "El CSV debe tener encabezado y al menos una fila de datos.", error: true }); return; }
-    let ok = 0;
-    const errores = [];
-    const alumnosTocados = new Set();
-    for (let i = 1; i < lines.length; i++) {
-      const partes = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
-      const [alumnoId, bimestreVal, asignaturaVal, notaVal] = partes;
-      if (!alumnoId || !bimestreVal || !asignaturaVal || notaVal === undefined) { errores.push(`Fila ${i + 1}: datos incompletos`); continue; }
-      const bimestreNum = Number(bimestreVal);
-      if (![1,2,3,4].includes(bimestreNum)) { errores.push(`Fila ${i + 1}: bimestre debe ser 1, 2, 3 o 4`); continue; }
-      const lit = normalizarCalificacionLiteral(notaVal);
-      if (!lit) { errores.push(`Fila ${i + 1}: calificación debe ser AD, A, B o C`); continue; }
-      try {
-        await req("/notas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alumno: Number(alumnoId), asignatura: asignaturaVal, calificacion_literal: lit, bimestre: bimestreNum }) });
-        ok += 1;
-        alumnosTocados.add(Number(alumnoId));
-      } catch (err) { errores.push(`Fila ${i + 1}: ${err.message || "error"}`); }
-    }
-    setArchivoMasivo(null);
-    await loadAlumnos();
-    // Cálculo automático del riesgo para cada alumno con notas cargadas
-    for (const id of alumnosTocados) { await recalcularRiesgo(id); }
-    if (errores.length) {
-      setNotasStatus({ msg: `Procesadas ${ok} filas. Errores: ${errores.slice(0, 5).join("; ")}${errores.length > 5 ? "…" : ""}`, error: ok === 0 });
-    } else {
-      setNotasStatus({ msg: `Carga masiva: ${ok} nota(s) registrada(s).`, error: false });
-    }
-  };
-
   const descargarExpediente = async () => {
     if (!expAlumno) return notify("Selecciona un estudiante para descargar el expediente.", true);
     try {
@@ -773,17 +670,18 @@ export default function App() {
       ]);
       const encuesta = Array.isArray(encuestas) && encuestas.length ? encuestas[0] : null;
       const pred = Array.isArray(preds) && preds.length ? preds[0] : null;
-      const [shap, shapRiesgo] = pred
+      const [shap, shapRiesgo, recomendaciones] = pred
         ? await Promise.all([
             req(`/predicciones/${pred.id}/shap/`).catch(() => null),
             req(`/predicciones/${pred.id}/shap-riesgo/`).catch(() => null),
+            req(`/predicciones/${pred.id}/recomendaciones/`).catch(() => null),
           ])
-        : [null, null];
+        : [null, null, null];
 
       const win = window.open("", "_blank");
       if (!win) return notify("Permite las ventanas emergentes para descargar el expediente.", true);
       win.document.open();
-      win.document.write(buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo }));
+      win.document.write(buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomendaciones }));
       win.document.close();
       notify("Expediente generado. Usa «Guardar como PDF» en el diálogo de impresión.");
     } catch (err) {
@@ -833,18 +731,8 @@ export default function App() {
 
   /* ── Main app ────────────────────────────────────────────────────────── */
 
-  const navLabels = {
-    dashboard:    { icon: "⊞", label: "Dashboard" },
-    general:      { icon: "▦", label: "Dashboard General" },
-    alumno:       { icon: "◎", label: "Registrar Alumno" },
-    lista:        { icon: "≡", label: "Lista de Alumnos" },
-    encuesta:     { icon: "☰", label: "Encuesta" },
-    predicciones: { icon: "↗", label: "Historial de Predicciones" },
-    notas:        { icon: "✎", label: "Subir Notas" },
-    expediente:   { icon: "⊡", label: "Expediente Psicológico" },
-  };
-
-  const viewsPermitidas = VIEWS_POR_ROL[auth.rol] ?? views;
+  const viewsPermitidas = viewsDeRol(auth.rol);
+  const soloLectura = !puedeGestionarAlumnos(auth.rol);
 
   return (
     <div className="app-shell">
@@ -859,7 +747,7 @@ export default function App() {
         </div>
         <nav>
           {viewsPermitidas.map((v) => {
-            const { icon, label } = navLabels[v];
+            const { icon, label } = NAV_LABELS[v];
             return (
               <button
                 key={v}
@@ -905,7 +793,6 @@ export default function App() {
           const acadPieData = dashData ? buildAcadPieData(dashData.nivel_riesgo, dashData.probabilidad) : [];
           const tdahPieData = dashData ? buildTdahPieData(tdahNivel, tdahConf) : [];
           const factoresData = dashData ? buildFactoresData(dashData) : [];
-          const recomendaciones = dashData ? generarRecomendaciones(dashData) : [];
 
           return (
             <div className="dashboard">
@@ -1064,23 +951,8 @@ export default function App() {
                     </div>
 
                     <div className="chart-panel">
-                      <h3 className="chart-title">Recomendaciones Generadas</h3>
-                      <ul className="rec-list">
-                        {recomendaciones.map((r, i) => (
-                          <li key={i} className="rec-item">
-                            <span className="rec-icon">{r.icon}</span>
-                            <span className="rec-text">{r.text}</span>
-                            <span className={`priority-tag priority-tag--${r.priority}`}>{r.priorityLabel}</span>
-                          </li>
-                        ))}
-                      </ul>
-                      <button
-                        type="button"
-                        className="ver-todas-btn"
-                        onClick={() => goToView("predicciones")}
-                      >
-                        Ver todas las recomendaciones
-                      </button>
+                      <h3 className="chart-title">Plan de Acción (analítica prescriptiva)</h3>
+                      <RecomendacionesPanel predId={dashData.id} />
                     </div>
                   </div>
                 </>
@@ -1091,29 +963,18 @@ export default function App() {
 
         {/* ── Dashboard General ──────────────────────── */}
         {activeView === "general" && (() => {
-          const latestByAlumno = {};
-          todosPredicciones.forEach((p) => { if (!latestByAlumno[p.alumno]) latestByAlumno[p.alumno] = p; });
-          const latest = Object.values(latestByAlumno);
-
-          const riesgoCount = { Alto: 0, Medio: 0, Bajo: 0 };
-          const tdahCount = { Alta: 0, Media: 0, Baja: 0 };
-          latest.forEach((p) => {
-            if (riesgoCount[p.nivel_riesgo] != null) riesgoCount[p.nivel_riesgo]++;
-            tdahCount[tdahNivelProb(p.nivel_tdah)]++;
-          });
-
+          // Filtrado cruzado (AND). Los contadores KPI se calculan sobre el
+          // conjunto YA filtrado, de modo que reaccionan en tiempo real.
+          const latest = ultimaPorAlumno(todosPredicciones);
+          const filtrados = filtrarPredicciones(latest, filtrosGeneral);
+          const { riesgo: riesgoCount, tdah: tdahCount } = contarPorGrupo(filtrados);
+          const filtroActivo = hayFiltroActivo(filtrosGeneral);
           const m = metricas?.val;
-          const filtrados = !generalFiltro ? []
-            : generalFiltro.tipo === "riesgo"
-              ? latest.filter((p) => p.nivel_riesgo === generalFiltro.valor)
-              : latest.filter((p) => tdahNivelProb(p.nivel_tdah) === generalFiltro.valor);
 
           const chip = (valor, count, color, tipo) => (
-            <div key={valor} role="button" tabIndex={0}
-              onClick={() => setGeneralFiltro({ tipo, valor })}
-              style={{ flex: 1, minWidth: 90, padding: "12px", borderRadius: 10, cursor: "pointer", textAlign: "center",
-                border: (generalFiltro?.tipo === tipo && generalFiltro?.valor === valor) ? `2px solid ${color}` : "1px solid #e2e8f0",
-                background: "#fff" }}>
+            <div key={valor}
+              style={{ flex: 1, minWidth: 90, padding: "12px", borderRadius: 10, textAlign: "center",
+                border: "1px solid #e2e8f0", background: "#fff" }}>
               <div style={{ fontSize: "1.8rem", fontWeight: 800, color }}>{count}</div>
               <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Probabilidad ${valor}` : valor}</div>
             </div>
@@ -1123,58 +984,65 @@ export default function App() {
             <div className="dashboard">
               <h1 className="page-title">Dashboard General</h1>
 
-              {/* Resumen */}
+              <FiltrosPrediccion
+                filtros={filtrosGeneral}
+                onChange={setFiltrosGeneral}
+                total={latest.length}
+                mostrados={filtrados.length}
+              />
+
+              {/* Resumen — reacciona al filtro cruzado */}
               <div className="kpi-row">
                 <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Alumnos registrados</span><span className="kpi-value" style={{ color: "#2563eb" }}>{alumnos.length}</span></div></div>
-                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Alumnos evaluados</span><span className="kpi-value" style={{ color: "#0ea5e9" }}>{latest.length}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">{filtroActivo ? "Alumnos filtrados" : "Alumnos evaluados"}</span><span className="kpi-value" style={{ color: "#0ea5e9" }}>{filtrados.length}</span></div></div>
                 <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Riesgo Académico Alto</span><span className="kpi-value" style={{ color: "#ef4444" }}>{riesgoCount.Alto}</span></div></div>
                 <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Prob. Alta de TDAH</span><span className="kpi-value" style={{ color: "#ef4444" }}>{tdahCount.Alta}</span></div></div>
               </div>
 
-              {/* Filtros por grupo */}
+              {/* Distribución dentro de la selección filtrada */}
               <div className="charts-row">
                 <div className="chart-panel">
-                  <h3 className="chart-title">Riesgo Académico — clic para ver alumnos</h3>
+                  <h3 className="chart-title">Riesgo Académico</h3>
                   <div style={{ display: "flex", gap: 10 }}>
                     {["Alto", "Medio", "Bajo"].map((nv) => chip(nv, riesgoCount[nv], RIESGO_COLORS[nv], "riesgo"))}
                   </div>
                 </div>
                 <div className="chart-panel">
-                  <h3 className="chart-title">Probabilidad de TDAH — clic para ver alumnos</h3>
+                  <h3 className="chart-title">Probabilidad de TDAH</h3>
                   <div style={{ display: "flex", gap: 10 }}>
                     {["Alta", "Media", "Baja"].map((nv) => chip(nv, tdahCount[nv], PROB_COLORS["Sospecha " + nv], "tdah"))}
                   </div>
                 </div>
               </div>
 
-              {/* Lista filtrada */}
-              {generalFiltro && (
-                <article className="panel" style={{ marginTop: 16, overflowX: "auto" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <h3 style={{ margin: 0 }}>
-                      {generalFiltro.tipo === "riesgo"
-                        ? `Alumnos con Riesgo Académico ${generalFiltro.valor}`
-                        : `Alumnos con Probabilidad ${generalFiltro.valor} de TDAH`} ({filtrados.length})
-                    </h3>
-                    <button type="button" onClick={() => setGeneralFiltro(null)} style={{ width: "auto", padding: "4px 12px" }}>Limpiar filtro</button>
-                  </div>
-                  {filtrados.length === 0 ? <p style={{ color: "#64748b" }}>No hay alumnos en este grupo.</p> : (
-                    <table className="lista-table">
-                      <thead><tr><th>Alumno</th><th>Riesgo Académico</th><th>Indicador TDAH</th><th>Fecha</th></tr></thead>
-                      <tbody>
-                        {filtrados.map((p) => (
-                          <tr key={p.id}>
-                            <td>{p.alumno_nombre ?? `Alumno ${p.alumno}`}</td>
-                            <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
-                            <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b></td>
-                            <td style={{ fontSize: "0.8rem", color: "#64748b" }}>{formatFecha(p.fecha_prediccion)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </article>
-              )}
+              {/* Lista de estudiantes filtrada */}
+              <article className="panel" style={{ marginTop: 16, overflowX: "auto" }}>
+                <h3 style={{ margin: "0 0 8px" }}>
+                  Estudiantes evaluados ({filtrados.length})
+                </h3>
+                {filtrados.length === 0 ? (
+                  <p style={{ color: "#64748b" }}>
+                    {filtroActivo
+                      ? "Ningún estudiante cumple los filtros seleccionados."
+                      : "Todavía no hay estudiantes con predicción generada."}
+                  </p>
+                ) : (
+                  <table className="lista-table">
+                    <thead><tr><th>Alumno</th><th>Riesgo Académico</th><th>Probabilidad TDAH</th><th>Inasistencias</th><th>Fecha</th></tr></thead>
+                    <tbody>
+                      {filtrados.map((p) => (
+                        <tr key={p.id}>
+                          <td>{p.alumno_nombre ?? `Alumno ${p.alumno}`}</td>
+                          <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
+                          <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b></td>
+                          <td>{p.inasistencias ?? 0}</td>
+                          <td style={{ fontSize: "0.8rem", color: "#64748b" }}>{formatFecha(p.fecha_prediccion)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </article>
 
               {/* Métricas del modelo */}
               <article className="panel" style={{ marginTop: 16 }}>
@@ -1271,7 +1139,6 @@ export default function App() {
               nombre: a.nombre, apellido: a.apellido, edad: a.edad,
               grado: a.grado, anio_cursada: a.anio_cursada,
               contacto_emergente: a.contacto_emergente,
-              condicion_social: a.condicion_social ?? "NINGUNA",
               genero: a.genero ?? "No especificado",
             });
           };
@@ -1305,7 +1172,12 @@ export default function App() {
 
           return (
             <div>
-              <h1 className="page-title">Lista de Alumnos</h1>
+              <h1 className="page-title">Listado de Alumnos</h1>
+              {soloLectura && (
+                <p className="form-legend" style={{ marginTop: -6 }}>
+                  🔒 Modo consulta: tu rol ({auth.rol}) accede al listado en solo lectura.
+                </p>
+              )}
               {listaStatus.msg && (
                 <div className={listaStatus.error ? "alert-error" : "alert-success"} style={{ marginBottom: 14 }}>
                   {listaStatus.msg}
@@ -1326,7 +1198,7 @@ export default function App() {
                       <p><b>Género:</b> {a.genero}</p>
                       <p><b>Año:</b> {a.anio_cursada}</p>
                       <p><b>Contacto:</b> {a.contacto_emergente}</p>
-                      <p><b>Condición social:</b> {a.condicion_social}</p>
+                      <p><b>Inasistencias acumuladas:</b> {a.inasistencias ?? 0} día(s)</p>
                       {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "#d62828" : pred.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {tdahTexto(pred.nivel_tdah)}</p></>}
                       <button style={{ marginTop: 16 }} onClick={() => setListaVerAlumno(null)}>Cerrar</button>
                     </div>
@@ -1375,6 +1247,7 @@ export default function App() {
                         <th>Apellido</th>
                         <th>Grado</th>
                         <th>Edad</th>
+                        <th>Inasist.</th>
                         <th>Estado</th>
                         <th>Acciones</th>
                       </tr>
@@ -1389,13 +1262,24 @@ export default function App() {
                             <td>{a.apellido}</td>
                             <td>{a.grado}</td>
                             <td>{a.edad}</td>
+                            <td>{a.inasistencias ?? 0}</td>
                             <td><span className="lista-badge" style={{ background: est.color }}>{est.label}</span></td>
                             <td>
                               <div className="lista-actions">
                                 <button className="lista-btn lista-btn--ver" onClick={() => setListaVerAlumno(a.id)}>Ver</button>
-                                <button className="lista-btn lista-btn--edit" onClick={() => iniciarEdicion(a)}>Editar</button>
-                                <button className="lista-btn lista-btn--del" onClick={() => eliminarAlumno(a.id, `${a.nombre} ${a.apellido}`)}>Eliminar</button>
-                                <button className="lista-btn lista-btn--enc" onClick={() => { setEncuestaForm({ ...initialEncuesta, alumno: String(a.id) }); goToView("encuesta"); }}>Encuesta</button>
+                                {/* Escritura: solo Docente/Administrador. El Psicólogo consulta. */}
+                                {!soloLectura && (
+                                  <>
+                                    <button className="lista-btn lista-btn--edit" onClick={() => iniciarEdicion(a)}>Editar</button>
+                                    <button className="lista-btn lista-btn--del" onClick={() => eliminarAlumno(a.id, `${a.nombre} ${a.apellido}`)}>Eliminar</button>
+                                  </>
+                                )}
+                                {puedeVer(auth.rol, "encuesta") && (
+                                  <button className="lista-btn lista-btn--enc" onClick={() => { setEncuestaForm({ ...initialEncuesta, alumno: String(a.id) }); goToView("encuesta"); }}>Encuesta</button>
+                                )}
+                                {puedeVer(auth.rol, "inasistencias") && (
+                                  <button className="lista-btn lista-btn--enc" onClick={() => goToView("inasistencias")}>Inasistencias</button>
+                                )}
                                 <button className="lista-btn lista-btn--pred" onClick={() => { setPredAlumno(String(a.id)); loadPredicciones(a.id); goToView("predicciones"); }}>Predicción</button>
                               </div>
                             </td>
@@ -1468,21 +1352,6 @@ export default function App() {
                     ))}
                   </div>
                 </div>
-                {/* Inasistencias */}
-                <div className="form-section full encuesta-bloque">
-                  <h3 className="form-section__title">Inasistencias</h3>
-                  <p className="form-legend">Número de días de inasistencia del alumno en el período evaluado.</p>
-                  <div className="field-group" style={{ maxWidth: 260 }}>
-                    <label htmlFor="encuesta-inasistencias">Días de inasistencia</label>
-                    <input
-                      id="encuesta-inasistencias"
-                      type="number" min={0} max={200}
-                      value={encuestaForm.inasistencias ?? 0}
-                      onChange={(e) => setEncuestaForm({ ...encuestaForm, inasistencias: e.target.value })}
-                    />
-                  </div>
-                </div>
-
                 {encuestaStatus.msg && (
                   <div className={encuestaStatus.error ? "alert-error" : "alert-success"} role="status">
                     {encuestaStatus.msg}
@@ -1525,13 +1394,28 @@ export default function App() {
                       {bloque("Déficit de Atención (DA)", encuestaKeysDA, 15)}
                       {bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, 15)}
                       {bloque("Trastorno de Conducta (TC)", encuestaKeysTC, 30)}
-                      <p style={{ margin: "8px 0 0" }}><b>Inasistencias:</b> {enc.inasistencias ?? 0} día(s)</p>
+                      <p style={{ margin: "8px 0 0", color: "#64748b", fontSize: "0.8rem" }}>
+                        Total EDAH: {suma(encuestaKeysDA) + suma(encuestaKeysHI) + suma(encuestaKeysTC)}/60
+                      </p>
                     </div>
                   );
                 })}
               </article>
             )}
           </div>
+        )}
+
+        {/* ── Control de Inasistencias ───────────────── */}
+        {activeView === "inasistencias" && (
+          <InasistenciasView
+            alumnos={alumnos}
+            notify={notify}
+            onGuardado={async () => {
+              await loadAlumnos();
+              await loadTodosPredicciones();
+              if (dashAlumno) await loadDashData(dashAlumno);
+            }}
+          />
         )}
 
         {/* ── Predicciones ───────────────────────────── */}
@@ -1730,12 +1614,17 @@ export default function App() {
                 </form>
               )}
               {notasModoLista === "actuales" && notasModoCarga === "masiva" && (
-                <form className="grid notas-form" onSubmit={submitMasivaCsv}>
-                  <p className="form-legend full">CSV con encabezado: <strong>alumno_id,bimestre,asignatura,calificacion</strong> (bimestre: 1-4; asignatura: nombre del curso; calificacion: AD, A, B o C). Excel: exporta a CSV antes de subir.</p>
-                  <input className="full" type="file" accept=".csv,text/csv" onChange={(e) => setArchivoMasivo(e.target.files?.[0] ?? null)} />
-                  {notasStatus.msg && <div className={notasStatus.error ? "alert-error" : "alert-success"} role="status">{notasStatus.msg}</div>}
-                  <button className="full" type="submit">Procesar archivo</button>
-                </form>
+                <CargaMasivaNotas
+                  notify={notify}
+                  onProcesado={async () => {
+                    await loadAlumnos();
+                    await loadTodosPredicciones();
+                    if (notaForm.alumno) {
+                      const data = await req(`/notas/?alumno=${notaForm.alumno}`).catch(() => []);
+                      setHistoricoNotas(Array.isArray(data) ? data : []);
+                    }
+                  }}
+                />
               )}
               {notasModoLista === "historico" && (
                 <div className="grid notas-form">

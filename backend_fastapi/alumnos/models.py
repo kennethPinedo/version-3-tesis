@@ -13,8 +13,15 @@ class Alumno(Base):
     grado = Column(String(50), nullable=False)
     anio_cursada = Column(Integer, default=2024)
     contacto_emergente = Column(String(100), nullable=False)
+    # LEGADO: la condición social ya no se captura ni se expone en la API
+    # (depuración de datos sensibles). Se conserva la columna para no romper
+    # bases de datos existentes.
     condicion_social = Column(String(50), default="NINGUNA")
     genero = Column(String(30), default="No especificado")
+    # Inasistencias acumuladas del alumno. Se registran en el módulo
+    # "Control de Inasistencias" (rol Docente), NO en la encuesta EDAH: el
+    # instrumento psicométrico contiene únicamente sus 20 ítems.
+    inasistencias = Column(Integer, default=0, nullable=False)
 
 
 class Encuesta(Base):
@@ -45,8 +52,13 @@ class Encuesta(Base):
     TC8 = Column(Integer, nullable=False)
     TC9 = Column(Integer, nullable=False)
     TC10 = Column(Integer, nullable=False)
-    # Inasistencias del alumno en el período evaluado
+    # LEGADO: las inasistencias se movieron a Alumno.inasistencias (módulo
+    # independiente). La columna se conserva —y se sigue escribiendo en 0— para
+    # no romper bases de datos ya creadas con NOT NULL.
     inasistencias = Column(Integer, default=0, nullable=False)
+    # Se mantiene Date (no se migra el tipo para no romper BD existentes). El
+    # desempate de dos encuestas del mismo día se resuelve ordenando además por
+    # id descendente en las consultas.
     fecha_aplicacion = Column(Date, default=date.today)
 
 
