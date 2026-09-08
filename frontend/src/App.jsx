@@ -383,6 +383,43 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
 </body></html>`;
 }
 
+/* ── Expediente: ventana de espera y descarga de respaldo ───────────────── */
+
+// Se pinta en la ventana ANTES de pedir los datos, para poder abrirla dentro de
+// la activación del clic (ver descargarExpediente).
+const EXPEDIENTE_CARGANDO = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><title>Generando expediente…</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #1e293b; display: grid;
+         place-content: center; height: 100vh; margin: 0; text-align: center; }
+  h1 { font-size: 17px; font-weight: 600; margin: 0 0 8px; }
+  p  { font-size: 13px; color: #64748b; margin: 0; max-width: 34ch; line-height: 1.6; }
+  .dot { width: 34px; height: 34px; margin: 0 auto 18px; border-radius: 50%;
+         border: 3px solid #e2e8f0; border-top-color: #2563eb; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+</style></head><body>
+  <div>
+    <div class="dot"></div>
+    <h1>Generando expediente…</h1>
+    <p>Recuperando la evaluación y la predicción del estudiante. La primera consulta
+       puede tardar si el servidor estaba inactivo.</p>
+  </div>
+</body></html>`;
+
+// Respaldo cuando el navegador bloquea la ventana emergente: se entrega el
+// expediente como archivo HTML que el usuario abre e imprime a PDF.
+function descargarExpedienteComoArchivo(html, nombreArchivo) {
+  const url = URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombreArchivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 /* ── Visualización SHAP: cada factor como barra (peso + dirección) ───────── */
 function ShapFactores({ features }) {
   if (!features || !features.length)
@@ -425,6 +462,7 @@ export default function App() {
   const [notaForm, setNotaForm] = useState(initialNota);
   const [notasAsig, setNotasAsig] = useState({});  // { asignatura: "AD"|"A"|"B"|"C"|"" }
   const [expAlumno, setExpAlumno] = useState("");
+  const [expLoading, setExpLoading] = useState(false);
   const [predAlumno, setPredAlumno] = useState("");
   const [todosPredicciones, setTodosPredicciones] = useState([]);
   const [listaVerAlumno, setListaVerAlumno] = useState(null);
@@ -662,14 +700,32 @@ export default function App() {
 
   const descargarExpediente = async () => {
     if (!expAlumno) return notify("Selecciona un estudiante para descargar el expediente.", true);
+
+    // La ventana se abre AQUÍ, de forma síncrona. window.open() solo funciona
+    // mientras dura la activación transitoria del clic (~5 s en Chrome); si se
+    // llama después de un await la bloquea el navegador. En local no se notaba
+    // porque la API responde en milisegundos, pero en producción la petición
+    // viaja al backend —que además puede estar despertando— y la activación ya
+    // ha expirado. Mientras llegan los datos, la ventana muestra un aviso.
+    let win = window.open("", "_blank");
+    if (win) {
+      win.document.open();
+      win.document.write(EXPEDIENTE_CARGANDO);
+      win.document.close();
+    }
+
+    setExpLoading(true);
     try {
       const alumno = alumnos.find((a) => String(a.id) === String(expAlumno)) ?? null;
+      // Sin .catch(): si estas dos fallan no hay expediente que emitir y el
+      // usuario debe enterarse, en vez de recibir un documento vacío.
       const [encuestas, preds] = await Promise.all([
-        req(`/encuestas/?alumno=${expAlumno}`).catch(() => []),
-        req(`/predicciones/?alumno=${expAlumno}`).catch(() => []),
+        req(`/encuestas/?alumno=${expAlumno}`),
+        req(`/predicciones/?alumno=${expAlumno}`),
       ]);
       const encuesta = Array.isArray(encuestas) && encuestas.length ? encuestas[0] : null;
       const pred = Array.isArray(preds) && preds.length ? preds[0] : null;
+      // Estas tres sí son complementarias: el expediente se emite sin ellas.
       const [shap, shapRiesgo, recomendaciones] = pred
         ? await Promise.all([
             req(`/predicciones/${pred.id}/shap/`).catch(() => null),
@@ -678,14 +734,24 @@ export default function App() {
           ])
         : [null, null, null];
 
-      const win = window.open("", "_blank");
-      if (!win) return notify("Permite las ventanas emergentes para descargar el expediente.", true);
-      win.document.open();
-      win.document.write(buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomendaciones }));
-      win.document.close();
-      notify("Expediente generado. Usa «Guardar como PDF» en el diálogo de impresión.");
+      const html = buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomendaciones });
+
+      if (win && !win.closed) {
+        win.document.open();
+        win.document.write(html);
+        win.document.close();
+        notify("Expediente generado. Usa «Guardar como PDF» en el diálogo de impresión.");
+      } else {
+        // Ventana bloqueada o cerrada por el usuario: se entrega como archivo.
+        const nombre = alumno ? `${alumno.nombre}_${alumno.apellido}` : `alumno_${expAlumno}`;
+        descargarExpedienteComoArchivo(html, `Expediente_${nombre.replace(/\s+/g, "_")}.html`);
+        notify("Ventana emergente bloqueada: el expediente se descargó como archivo. Ábrelo y usa «Guardar como PDF».");
+      }
     } catch (err) {
+      if (win && !win.closed) win.close();
       notify(err.message || "No se pudo generar el expediente.", true);
+    } finally {
+      setExpLoading(false);
     }
   };
 
@@ -1691,8 +1757,8 @@ export default function App() {
                 <option value="">-- Selecciona un estudiante --</option>
                 {alumnoOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
               </select>
-              <button className="full" type="button" onClick={descargarExpediente}>
-                ⬇ Descargar Expediente
+              <button className="full" type="button" onClick={descargarExpediente} disabled={expLoading || !expAlumno}>
+                {expLoading ? "Generando expediente…" : "⬇ Descargar Expediente"}
               </button>
             </div>
           </article>
