@@ -195,6 +195,16 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
       <tr><td class="k">Contacto</td><td>${esc(alumno.contacto_emergente)}</td><td class="k">Inasistencias</td><td>${esc(pred?.inasistencias ?? alumno.inasistencias ?? 0)} día(s)</td></tr>
     </table>` : `<p class="muted">Datos del alumno no disponibles.</p>`;
 
+  // Confianza del modelo en la clase de TDAH predicha. Se declara aquí, en el
+  // ámbito de la función, porque la consumen DOS secciones del documento (el
+  // resumen y la ficha de predicción); dentro de un bloque `if` quedaba fuera
+  // de alcance para la segunda y lanzaba ReferenceError.
+  const tdahConfPct = pred
+    ? (pred.confianza_tdah != null
+        ? Math.round(pred.confianza_tdah * 100)
+        : Math.round((pred.prob_tdah ?? 0) * 100))
+    : 0;
+
   // ── 2. Dashboard ─────────────────────────────────────────────────────────
   let dashboardHTML;
   if (pred) {
@@ -202,9 +212,6 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     const tdahLevel = tdahTexto(pred.nivel_tdah);
     const esTdah = !!pred.nivel_tdah && pred.nivel_tdah !== "Sospecha Baja" && pred.nivel_tdah !== "Sin TDAH";
     const tdahColor = esTdah ? "#f97316" : "#22c55e";
-    const tdahConfPct = pred.confianza_tdah != null
-      ? Math.round(pred.confianza_tdah * 100)
-      : Math.round((pred.prob_tdah ?? 0) * 100);
     const rendLetra = pred.promedio_final ?? pred.prediccion_notas ?? "—";
     const rendColor = (rendLetra === "AD" || rendLetra === "A") ? "#22c55e"
       : rendLetra === "B" ? "#f97316"
