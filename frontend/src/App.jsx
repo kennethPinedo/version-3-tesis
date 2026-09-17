@@ -4,7 +4,8 @@ import {
   Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 
-import { req } from "./lib/api";
+import { req, reqJson } from "./lib/api";
+import { guardarToken, borrarToken, leerToken } from "./lib/sesion";
 import { NAV_LABELS, puedeGestionarAlumnos, puedeVer, viewsDeRol, vistaInicial } from "./lib/rbac";
 import {
   FILTROS_INICIALES, PROB_COLORS, RIESGO_COLORS, contarPorGrupo, filtrarPredicciones,
@@ -14,6 +15,7 @@ import FiltrosPrediccion from "./components/FiltrosPrediccion";
 import RecomendacionesPanel from "./components/RecomendacionesPanel";
 import CargaMasivaNotas from "./components/CargaMasivaNotas";
 import InasistenciasView from "./views/InasistenciasView";
+import { useConfirmacion } from "./lib/useConfirmacion";
 
 const encuestaKeys = [
   "DA1", "DA2", "DA3", "DA4", "DA5",
@@ -71,12 +73,9 @@ const ASIGNATURAS_VALIDAS = [
   "Formación Integral",
 ];
 
-// Usuarios y roles que pueden acceder al sistema (Director / Psicólogo / Docente)
-const USUARIOS = {
-  admin:     { password: "admin123",   rol: "Administrador" },
-  psicologo: { password: "psico123",   rol: "Psicólogo" },
-  docente:   { password: "docente123", rol: "Docente" },
-};
+// Las cuentas viven en la tabla `usuarios` del servidor, con la contraseña
+// cifrada (PBKDF2-HMAC-SHA256). Antes estaban aquí, en texto plano y visibles
+// para cualquiera que abriera el código fuente de la página.
 
 function normalizarCalificacionLiteral(texto) {
   const t = String(texto).trim().toUpperCase();
@@ -98,9 +97,32 @@ function promedioLiteral(literales) {
   return { num: Math.round(num * 100) / 100, letra: NOTA_LET[Math.round(num)] };
 }
 
+// Longitudes oficiales de los documentos peruanos. El backend valida lo mismo;
+// aquí se replican para poder avisar antes de enviar el formulario.
+const TIPOS_DOCUMENTO = {
+  DNI:       { etiqueta: "DNI",                  longitud: 8, patron: /^\d{8}$/,        ayuda: "8 dígitos, sin puntos ni guiones." },
+  CE:        { etiqueta: "Carné de Extranjería", longitud: 9, patron: /^\d{9}$/,        ayuda: "9 dígitos." },
+  PASAPORTE: { etiqueta: "Pasaporte",            longitud: 9, patron: /^[A-Z0-9]{9}$/,  ayuda: "9 caracteres: letras mayúsculas y dígitos." },
+};
+
+// Primaria llega a 6°, secundaria a 5°.
+const NIVELES = { Primaria: 6, Secundaria: 5 };
+
+// Mismo enmascarado que aplica el backend, para que el diálogo de confirmación
+// muestre el documento sin exhibirlo entero.
+const enmascararDoc = (n) => {
+  if (!n) return "—";
+  return n.length <= 4 ? "•".repeat(n.length) : "•".repeat(n.length - 4) + n.slice(-4);
+};
+
+// Nombres: letras con tildes y ñ, dígitos, espacios, apóstrofo y guion.
+// Se bloquean los signos, no los números (hay alumnos registrados como «Alumno 01»).
+const RE_NOMBRE = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9'\- ]*$/;
+
 const initialAlumno = {
-  nombre: "", apellido: "", contacto_emergente: "", edad: "", grado: "",
-  anio_cursada: "2025", genero: "",
+  nombre: "", apellido: "", contacto_emergente: "", edad: "",
+  nivel: "Secundaria", grado: "", anio_cursada: "2025", genero: "",
+  tipo_documento: "DNI", numero_documento: "",
 };
 
 const initialEncuesta = Object.fromEntries([["alumno", ""], ...encuestaKeys.map((k) => [k, "0"])]);
@@ -108,7 +130,7 @@ const initialNota = { alumno: "", bimestre: "1" };
 
 /* ── Chart & dashboard helpers ─────────────────────────────────────────── */
 
-const FACTOR_COLORS = ["#f97316", "#fb923c", "#3b82f6", "#22c55e", "#a855f7", "#14b8a6"];
+const FACTOR_COLORS = ["#a78bfa", "#34d399", "#60a5fa", "#fbbf24", "#f87171", "#22d3ee"];
 
 function buildAcadPieData(nivelRiesgo, probabilidad) {
   // Dona invertida (medidor de seguridad): el verde ("Bajo") es la parte SIN
@@ -123,25 +145,27 @@ function buildAcadPieData(nivelRiesgo, probabilidad) {
   return data.filter((d) => d.value > 0);
 }
 
-// Dona de TDAH en 3 niveles (Probabilidad Alta/Media/Baja). El nivel que predijo
-// el modelo es el gajo dominante (= su confianza); el resto se reparte.
-function buildTdahPieData(nivelProb, conf) {
-  const top = Math.round((conf ?? 0) * 100);
-  const rem = 100 - top;
-  if (nivelProb === "Alta") return [
-    { name: "Sospecha Alta",  value: top },
-    { name: "Sospecha Media", value: Math.round(rem * 0.6) },
-    { name: "Sospecha Baja",  value: rem - Math.round(rem * 0.6) },
-  ];
-  if (nivelProb === "Media") return [
-    { name: "Sospecha Alta",  value: Math.round(rem * 0.45) },
-    { name: "Sospecha Media", value: top },
-    { name: "Sospecha Baja",  value: rem - Math.round(rem * 0.45) },
-  ];
+// Dona de TDAH: las TRES probabilidades que devuelve el modelo, tal cual.
+// Antes se dibujaba solo la clase ganadora y las otras dos porciones se
+// repartían con constantes arbitrarias (0.6 / 0.45 / 0.18), de modo que el
+// gráfico mostraba cifras que el modelo nunca produjo.
+function buildTdahPieData(pred) {
+  const p = pred?.proba_tdah;
+  if (p && p.alta != null && p.media != null && p.baja != null) {
+    return [
+      { name: "Sospecha Alta",  value: Math.round(p.alta * 100) },
+      { name: "Sospecha Media", value: Math.round(p.media * 100) },
+      { name: "Sospecha Baja",  value: Math.round(p.baja * 100) },
+    ].filter((d) => d.value > 0);
+  }
+  // Predicción generada antes de que se guardara la distribución completa:
+  // se muestra la clase predicha frente al resto, sin repartir ese resto
+  // entre las otras dos clases (eso volvería a inventar datos).
+  const nivel = tdahNivelProb(pred?.nivel_tdah);
+  const conf = Math.round((pred?.confianza_tdah ?? 0) * 100);
   return [
-    { name: "Sospecha Alta",  value: Math.round(rem * 0.18) },
-    { name: "Sospecha Media", value: rem - Math.round(rem * 0.18) },
-    { name: "Sospecha Baja",  value: top },
+    { name: `Sospecha ${nivel}`, value: conf },
+    { name: "Resto de clases", value: Math.max(0, 100 - conf) },
   ];
 }
 
@@ -430,7 +454,7 @@ function descargarExpedienteComoArchivo(html, nombreArchivo) {
 /* ── Visualización SHAP: cada factor como barra (peso + dirección) ───────── */
 function ShapFactores({ features }) {
   if (!features || !features.length)
-    return <p style={{ color: "#94a3b8", fontSize: "0.84rem", fontStyle: "italic", margin: 0 }}>Sin factores disponibles.</p>;
+    return <p style={{ color: "var(--tinta-suave)", fontSize: "0.84rem", fontStyle: "italic", margin: 0 }}>Sin factores disponibles.</p>;
   const maxAbs = Math.max(...features.map((f) => Math.abs(f.shap)), 0.0001);
   return (
     <div style={{ marginTop: 4 }}>
@@ -440,10 +464,10 @@ function ShapFactores({ features }) {
         const color = up ? "#ef4444" : "#22c55e";
         return (
           <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10, margin: "7px 0" }}>
-            <div style={{ width: 210, flexShrink: 0, fontSize: "0.82rem", color: "#334155" }}>
-              {f.label} <span style={{ color: "#94a3b8", fontWeight: 600 }}>({f.value_fmt})</span>
+            <div style={{ width: 210, flexShrink: 0, fontSize: "0.82rem", color: "var(--tinta-media)" }}>
+              {f.label} <span style={{ color: "var(--tinta-suave)", fontWeight: 600 }}>({f.value_fmt})</span>
             </div>
-            <div style={{ flex: 1, background: "#eef2f7", borderRadius: 7, height: 20, overflow: "hidden" }}>
+            <div style={{ flex: 1, background: "var(--superficie-2)", borderRadius: 7, height: 20, overflow: "hidden" }}>
               <div style={{ width: `${pct}%`, background: color, height: "100%", borderRadius: 7, transition: "width .4s ease" }} />
             </div>
             <div style={{ width: 140, flexShrink: 0, fontSize: "0.78rem", color, fontWeight: 700, textAlign: "right" }}>
@@ -456,10 +480,79 @@ function ShapFactores({ features }) {
   );
 }
 
+/* ── Pantalla de acceso: fotografía a la izquierda, formulario a la derecha ── */
+function PantallaAcceso({ children }) {
+  return (
+    <main className="auth-shell">
+      {/* Decorativa: el lector de pantalla no gana nada describiéndola. */}
+      <div className="auth-foto" aria-hidden="true">
+        <div className="auth-foto-texto">
+          <h2>Detectar a tiempo para poder acompañar</h2>
+          <p>
+            Evaluación psicoeducativa, seguimiento académico y modelos predictivos
+            explicables, reunidos en un solo lugar.
+          </p>
+        </div>
+      </div>
+      <div className="auth-panel">{children}</div>
+    </main>
+  );
+}
+
 /* ── App ───────────────────────────────────────────────────────────────── */
 
 export default function App() {
-  const [auth, setAuth] = useState({ usuario: "", password: "", logged: false, rol: "" });
+  // Toda acción que escriba en la base pasa antes por aquí. `dialogo` se
+  // renderiza en las tres ramas de la aplicación (acceso, cambio de clave y
+  // pantalla principal), porque desde las tres se puede modificar algo.
+  const { confirmar, dialogo } = useConfirmacion();
+
+  const [auth, setAuth] = useState({
+    usuario: "", password: "", logged: false, rol: "",
+    nombre: "", debeCambiar: false,
+  });
+  const [autenticando, setAutenticando] = useState(false);
+  const [restaurando, setRestaurando] = useState(Boolean(leerToken()));
+  const [cambioClave, setCambioClave] = useState({ actual: "", nueva: "", repetir: "", error: "", enviando: false });
+
+  // Bandeja del administrador: solicitudes de recuperación por atender.
+  const [solicitudes, setSolicitudes] = useState([]);
+  const [solicitudesCargando, setSolicitudesCargando] = useState(false);
+  const [claveRepuesta, setClaveRepuesta] = useState(null);
+
+  const cargarSolicitudes = async () => {
+    setSolicitudesCargando(true);
+    try {
+      setSolicitudes(await req("/auth/recuperacion/pendientes"));
+    } catch (err) {
+      notify(err.message || "No se pudieron cargar las solicitudes.", true);
+      setSolicitudes([]);
+    } finally {
+      setSolicitudesCargando(false);
+    }
+  };
+
+  const atenderSolicitud = async (sol) => {
+    if (!await confirmar({
+      titulo: `¿Reponer la contraseña de «${sol.usuario}»?`,
+      mensaje: "Se generará una contraseña temporal y se cerrarán todas las sesiones "
+             + "abiertas de esa persona. La contraseña se muestra una sola vez: "
+             + "anótala antes de cerrar el aviso.",
+      detalles: [
+        { etiqueta: "Usuario", valor: sol.usuario },
+        { etiqueta: "Referencia", valor: sol.codigo ?? String(sol.id) },
+      ],
+      tono: "peligro",
+      textoConfirmar: "Sí, reponer la contraseña",
+    })) return;
+    try {
+      const r = await reqJson(`/auth/recuperacion/${sol.id}/atender`, "POST");
+      setClaveRepuesta(r);
+      await cargarSolicitudes();
+    } catch (err) {
+      notify(err.message || "No se pudo atender la solicitud.", true);
+    }
+  };
   const [activeView, setActiveView] = useState("dashboard");
   const [status, setStatus] = useState({ msg: "", error: false });
   const [alumnos, setAlumnos] = useState([]);
@@ -473,6 +566,8 @@ export default function App() {
   const [predAlumno, setPredAlumno] = useState("");
   const [todosPredicciones, setTodosPredicciones] = useState([]);
   const [listaVerAlumno, setListaVerAlumno] = useState(null);
+  // Documentos revelados en esta sesión de pantalla; se olvidan al cerrar el modal.
+  const [docRevelado, setDocRevelado] = useState({});
   const [listaEditAlumno, setListaEditAlumno] = useState(null);
   const [listaEditForm, setListaEditForm] = useState({});
   const [listaStatus, setListaStatus] = useState({ msg: "", error: false });
@@ -512,9 +607,9 @@ export default function App() {
     setListaStatus({ msg: "", error: false });
     setListaVerAlumno(null);
     setListaEditAlumno(null);
+    setDocRevelado({});
     setFiltrosGeneral({ ...FILTROS_INICIALES });
-    if (v === "lista") loadTodosPredicciones();
-    if (v === "general") { loadTodosPredicciones(); loadMetricas(); }
+    if (v === "cuentas") { setClaveRepuesta(null); cargarSolicitudes(); }
   };
 
   // Seguridad: si el rol activo no tiene permiso para la vista actual, se le
@@ -522,6 +617,18 @@ export default function App() {
   useEffect(() => {
     if (auth.logged && !puedeVer(auth.rol, activeView)) setActiveView(vistaInicial(auth.rol));
   }, [activeView, auth.rol, auth.logged]);
+
+  // Las vistas de panorama y listado necesitan las predicciones de todos los
+  // alumnos. Se cargan aquí, atendiendo a la vista activa, y no dentro de
+  // goToView: tras iniciar sesión se entra directamente a una pantalla sin
+  // pasar por el menú, y los filtros se quedaban sin datos que filtrar.
+  useEffect(() => {
+    if (!auth.logged) return;
+    if (activeView === "dashboard" || activeView === "general" || activeView === "lista") {
+      loadTodosPredicciones();
+    }
+    if (activeView === "general") loadMetricas();
+  }, [auth.logged, activeView]);
 
   async function loadMetricas() {
     try { setMetricas(await req("/metricas/")); } catch { setMetricas(null); }
@@ -551,6 +658,33 @@ export default function App() {
       setTodosPredicciones([]);
     }
   }
+
+  // Filtros del panel: acotan la lista de estudiantes antes de elegir uno.
+  // Dos estados a propósito: `dashFiltros` es lo que filtra la lista y
+  // `dashBorrador` lo que el usuario está componiendo. Se igualan al pulsar
+  // Buscar; mientras difieran se avisa de que hay cambios sin aplicar.
+  const DASH_FILTROS_VACIOS = { texto: "", grado: "", riesgo: "Todos", tdah: "Todos" };
+  const [dashFiltros, setDashFiltros] = useState({ ...DASH_FILTROS_VACIOS });
+  const [dashBorrador, setDashBorrador] = useState({ ...DASH_FILTROS_VACIOS });
+
+  // SHAP del alumno mostrado en el panel: la explicación deja de estar
+  // escondida detrás de un botón en otra pantalla (SUS, ítem 5).
+  const [dashShap, setDashShap] = useState(null);
+  const [dashShapCargando, setDashShapCargando] = useState(false);
+
+  useEffect(() => {
+    const pid = dashData?.id;
+    if (!pid) { setDashShap(null); return; }
+    let cancelado = false;
+    setDashShapCargando(true);
+    Promise.all([
+      req(`/predicciones/${pid}/shap/`).catch(() => null),
+      req(`/predicciones/${pid}/shap-riesgo/`).catch(() => null),
+    ])
+      .then(([tdah, riesgo]) => { if (!cancelado) setDashShap({ tdah, riesgo }); })
+      .finally(() => { if (!cancelado) setDashShapCargando(false); });
+    return () => { cancelado = true; };
+  }, [dashData?.id]);
 
   async function loadDashData(alumnoId) {
     if (!alumnoId) { setDashData(null); setDashHistorial([]); return; }
@@ -606,29 +740,193 @@ export default function App() {
     setNotasAsig(map);
   }, [historicoNotas, notaForm.bimestre, notasModoLista, notasModoCarga, activeView]);
 
+  // Escape cierra el modal abierto — «salida de emergencia» de Nielsen y
+  // requisito de no atrapar el teclado (WCAG 2.1.2).
+  useEffect(() => {
+    if (!listaVerAlumno && !listaEditAlumno) return;
+    const alPulsar = (e) => {
+      if (e.key === "Escape") { setListaVerAlumno(null); setListaEditAlumno(null); }
+    };
+    window.addEventListener("keydown", alPulsar);
+    return () => window.removeEventListener("keydown", alPulsar);
+  }, [listaVerAlumno, listaEditAlumno]);
+
   const notify = (msg, error = false) => setStatus({ msg, error });
 
-  const onLogin = (e) => {
+  // Cierra la sesión limpiando el estado en memoria. Antes se recargaba la
+  // página entera, lo que no es un cierre de sesión sino un reinicio.
+  const cerrarSesion = async () => {
+    if (!await confirmar({
+      titulo: "¿Cerrar la sesión?",
+      mensaje: "Volverás a la pantalla de acceso y tendrás que identificarte de nuevo "
+             + "para seguir trabajando.",
+      detalles: [{ etiqueta: "Sesión de", valor: `${auth.nombre || auth.usuario} · ${auth.rol}` }],
+      tono: "aviso",
+      textoConfirmar: "Sí, cerrar sesión",
+    })) return;
+
+    try { await reqJson("/auth/logout", "POST"); } catch { /* el token ya no valía */ }
+    borrarToken();
+    setAuth({ usuario: "", password: "", logged: false, rol: "", nombre: "", debeCambiar: false });
+    setActiveView("dashboard");
+    setAlumnos([]);
+    setPredicciones([]);
+    setTodosPredicciones([]);
+    setDashData(null);
+    setDashAlumno("");
+    setHistoricoNotas([]);
+    setStatus({ msg: "Sesión cerrada.", error: false });
+  };
+
+  // Recuperación de acceso. `vista` alterna entre el formulario de entrada y
+  // el de solicitud; `resultado` guarda lo que se muestra tras solicitarla.
+  const [recuperar, setRecuperar] = useState({ abierto: false, usuario: "", resultado: null, error: "", enviando: false });
+
+  const solicitarRecuperacion = async (e) => {
     e.preventDefault();
-    const u = USUARIOS[auth.usuario.trim().toLowerCase()];
-    if (u && u.password === auth.password) {
-      setAuth((s) => ({ ...s, logged: true, rol: u.rol }));
-      setActiveView(vistaInicial(u.rol));
-      notify(`Sesión iniciada como ${u.rol}.`);
-    } else {
-      notify("Credenciales inválidas.", true);
+    if (!recuperar.usuario.trim()) {
+      setRecuperar({ ...recuperar, error: "Escribe el usuario con el que ingresas al sistema.", resultado: null });
+      return;
+    }
+    if (!await confirmar({
+      titulo: "¿Enviar la solicitud de recuperación?",
+      mensaje: "El administrador verá tu solicitud y repondrá tu contraseña. "
+             + "Recibirás un código de referencia para hacer el seguimiento.",
+      detalles: [{ etiqueta: "Usuario", valor: recuperar.usuario.trim() }],
+      tono: "aviso",
+      textoConfirmar: "Sí, enviar solicitud",
+    })) return;
+
+    setRecuperar((r) => ({ ...r, enviando: true, error: "" }));
+    try {
+      const res = await reqJson("/auth/recuperacion/solicitar", "POST", { usuario: recuperar.usuario.trim() });
+      setRecuperar((r) => ({
+        ...r, enviando: false, error: "",
+        resultado: { mensaje: res.mensaje, ref: res.codigo, dias: res.vigencia_dias,
+                     fecha: new Date().toLocaleString("es-PE") },
+      }));
+    } catch (err) {
+      setRecuperar((r) => ({ ...r, enviando: false, resultado: null,
+                             error: err.message || "No se pudo registrar la solicitud." }));
+    }
+  };
+
+  const volverAlAcceso = () => {
+    setRecuperar({ abierto: false, usuario: "", resultado: null, error: "" });
+    setStatus({ msg: "", error: false });
+  };
+
+  // Al recargar la página se recupera la sesión desde el token guardado, en
+  // lugar de devolver al usuario a la pantalla de acceso.
+  useEffect(() => {
+    if (!leerToken()) return;
+    let cancelado = false;
+    req("/auth/yo")
+      .then((u) => {
+        if (cancelado) return;
+        setAuth({ usuario: u.usuario, password: "", logged: true, rol: u.rol,
+                  nombre: u.nombre, debeCambiar: u.debe_cambiar });
+        setActiveView(vistaInicial(u.rol));
+      })
+      .catch(() => { if (!cancelado) borrarToken(); })
+      .finally(() => { if (!cancelado) setRestaurando(false); });
+    return () => { cancelado = true; };
+  }, []);
+
+  const onLogin = async (e) => {
+    e.preventDefault();
+    setAutenticando(true);
+    setStatus({ msg: "", error: false });
+    try {
+      const r = await reqJson("/auth/login", "POST", {
+        usuario: auth.usuario.trim(),
+        password: auth.password,
+      });
+      guardarToken(r.token);
+      setAuth({
+        usuario: r.usuario.usuario, password: "", logged: true, rol: r.usuario.rol,
+        nombre: r.usuario.nombre, debeCambiar: r.usuario.debe_cambiar,
+      });
+      setActiveView(vistaInicial(r.usuario.rol));
+      notify(r.usuario.debe_cambiar
+        ? "Debes definir una contraseña propia antes de continuar."
+        : `Sesión iniciada como ${r.usuario.rol}.`);
+    } catch (err) {
+      notify(err.message || "No se pudo iniciar sesión.", true);
+    } finally {
+      setAutenticando(false);
+    }
+  };
+
+  // Cambio de contraseña, obligatorio en el primer ingreso y tras una reposición.
+  const enviarCambioClave = async (e) => {
+    e.preventDefault();
+    if (cambioClave.nueva !== cambioClave.repetir) {
+      setCambioClave({ ...cambioClave, error: "Las dos contraseñas nuevas no coinciden." });
+      return;
+    }
+    if (!await confirmar({
+      titulo: "¿Cambiar tu contraseña?",
+      mensaje: "A partir de ahora entrarás al sistema con la contraseña nueva. "
+             + "La anterior dejará de funcionar de inmediato.",
+      detalles: [{ etiqueta: "Usuario", valor: auth.usuario || auth.nombre || "—" }],
+      tono: "aviso",
+      textoConfirmar: "Sí, cambiarla",
+    })) return;
+
+    setCambioClave({ ...cambioClave, enviando: true, error: "" });
+    try {
+      await reqJson("/auth/cambiar-password", "POST", {
+        password_actual: cambioClave.actual,
+        password_nueva: cambioClave.nueva,
+      });
+      setAuth((a) => ({ ...a, debeCambiar: false }));
+      setCambioClave({ actual: "", nueva: "", repetir: "", error: "", enviando: false });
+      notify("Contraseña actualizada. Ya puedes usar el sistema.");
+    } catch (err) {
+      setCambioClave((c) => ({ ...c, enviando: false, error: err.message || "No se pudo cambiar la contraseña." }));
     }
   };
 
   const submitAlumno = async (e) => {
     e.preventDefault();
     setAlumnoFormError("");
+    // Validación en el cliente: el backend vuelve a comprobarlo todo, pero
+    // avisar aquí evita un viaje al servidor para decir lo obvio.
+    const doc = TIPOS_DOCUMENTO[alumnoForm.tipo_documento];
+    const numero = (alumnoForm.numero_documento || "").trim().toUpperCase();
+    if (!RE_NOMBRE.test(alumnoForm.nombre.trim()) || !RE_NOMBRE.test(alumnoForm.apellido.trim())) {
+      setAlumnoFormError("El nombre y el apellido solo admiten letras, números, espacios, apóstrofo y guion.");
+      return;
+    }
+    if (!doc.patron.test(numero)) {
+      setAlumnoFormError(`${doc.etiqueta}: ${doc.ayuda} Has escrito ${numero.length} de ${doc.longitud}.`);
+      return;
+    }
+
     const body = {
       nombre: alumnoForm.nombre, apellido: alumnoForm.apellido,
       contacto_emergente: alumnoForm.contacto_emergente, edad: Number(alumnoForm.edad),
-      grado: alumnoForm.grado, anio_cursada: Number(alumnoForm.anio_cursada),
+      nivel: alumnoForm.nivel, grado: Number(alumnoForm.grado),
+      anio_cursada: Number(alumnoForm.anio_cursada),
       genero: alumnoForm.genero || "No especificado",
+      tipo_documento: alumnoForm.tipo_documento,
+      numero_documento: numero,
     };
+    if (!await confirmar({
+      titulo: `¿Registrar a ${body.nombre} ${body.apellido}?`,
+      mensaje: "Se creará el expediente del estudiante con estos datos. El documento "
+             + "de identidad quedará cifrado y no podrá repetirse en otro alumno.",
+      detalles: [
+        { etiqueta: "Estudiante", valor: `${body.nombre} ${body.apellido}` },
+        { etiqueta: "Edad", valor: `${body.edad} años` },
+        { etiqueta: "Grado", valor: `${body.grado}° de ${body.nivel}` },
+        { etiqueta: TIPOS_DOCUMENTO[body.tipo_documento].etiqueta, valor: enmascararDoc(numero) },
+        { etiqueta: "Contacto", valor: body.contacto_emergente },
+      ],
+      textoConfirmar: "Sí, registrar",
+    })) return;
+
     try {
       await req("/alumnos/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       setAlumnoForm(initialAlumno);
@@ -644,6 +942,20 @@ export default function App() {
     setEncuestaStatus({ msg: "", error: false });
     const body = { alumno: Number(encuestaForm.alumno) };
     encuestaKeys.forEach((k) => { body[k] = Number(encuestaForm[k]); });
+
+    const evaluado = alumnos.find((a) => String(a.id) === String(encuestaForm.alumno));
+    if (!await confirmar({
+      titulo: `¿Guardar la encuesta EDAH de ${evaluado ? `${evaluado.nombre} ${evaluado.apellido}` : "el estudiante"}?`,
+      mensaje: "Con esta encuesta el sistema estimará la probabilidad de TDAH del "
+             + "estudiante. Es una orientación psicoeducativa, nunca un diagnóstico clínico.",
+      detalles: [
+        { etiqueta: "Estudiante", valor: evaluado ? `${evaluado.nombre} ${evaluado.apellido}` : "—" },
+        { etiqueta: "Ítems respondidos", valor: `${encuestaKeys.length} de ${encuestaKeys.length}` },
+      ],
+      tono: "aviso",
+      textoConfirmar: "Sí, guardar la encuesta",
+    })) return;
+
     try {
       await req("/encuestas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       setEncuestaStatus({ msg: "Encuesta guardada correctamente.", error: false });
@@ -682,6 +994,20 @@ export default function App() {
       setNotasStatus({ msg: "Ingresa al menos una nota de curso (AD, A, B o C).", error: true });
       return;
     }
+    const evaluadoNotas = alumnos.find((a) => String(a.id) === String(notaForm.alumno));
+    if (!await confirmar({
+      titulo: `¿Guardar las notas del Bimestre ${bimestre}?`,
+      mensaje: "Al guardarlas, el sistema recalculará automáticamente el riesgo "
+             + "académico del estudiante con el nuevo promedio.",
+      detalles: [
+        { etiqueta: "Estudiante", valor: evaluadoNotas ? `${evaluadoNotas.nombre} ${evaluadoNotas.apellido}` : "—" },
+        { etiqueta: "Bimestre", valor: String(bimestre) },
+        { etiqueta: "Cursos", valor: entradas.map(([a, l]) => `${a}: ${l}`).join(" · ") },
+      ],
+      tono: "aviso",
+      textoConfirmar: "Sí, guardar las notas",
+    })) return;
+
     try {
       for (const [asignatura, calificacion_literal] of entradas) {
         await req("/notas/", {
@@ -764,6 +1090,19 @@ export default function App() {
 
   const generarPrediccion = async () => {
     if (!predAlumno) return notify("Selecciona un alumno para generar predicción.", true);
+
+    const objetivo = alumnos.find((a) => String(a.id) === String(predAlumno));
+    if (!await confirmar({
+      titulo: `¿Generar una predicción para ${objetivo ? `${objetivo.nombre} ${objetivo.apellido}` : "el estudiante"}?`,
+      mensaje: "Se ejecutarán los dos modelos con los datos vigentes y el resultado "
+             + "quedará guardado en el historial del estudiante.",
+      detalles: [
+        { etiqueta: "Estudiante", valor: objetivo ? `${objetivo.nombre} ${objetivo.apellido}` : "—" },
+        { etiqueta: "Grado", valor: objetivo?.grado ?? "—" },
+      ],
+      textoConfirmar: "Sí, generar",
+    })) return;
+
     try {
       await req("/predicciones/generar/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ alumno: Number(predAlumno) }) });
       await loadPredicciones(predAlumno);
@@ -777,28 +1116,216 @@ export default function App() {
 
   /* ── Auth screen ─────────────────────────────────────────────────────── */
 
+  // Mientras se valida el token guardado no se decide nada: mostrar el acceso
+  // aquí haría parpadear el formulario en cada recarga.
+  if (restaurando) {
+    return (
+      <PantallaAcceso>
+        <section className="auth-card" style={{ textAlign: "center" }}>
+          <p className="cargando" role="status" aria-live="polite" style={{ justifyContent: "center" }}>
+            <span className="spinner" aria-hidden="true" />Restaurando tu sesión…
+          </p>
+        </section>
+      </PantallaAcceso>
+    );
+  }
+
+  // Primer ingreso o contraseña repuesta por el administrador: no se entra al
+  // sistema hasta definir una propia.
+  if (auth.logged && auth.debeCambiar) {
+    return (
+      <PantallaAcceso>
+        {dialogo}
+        <section className="auth-card">
+          <h1>Define tu contraseña</h1>
+          <p>Hola, {auth.nombre}</p>
+          <p className="form-legend">
+            Estás usando una contraseña asignada. Elige una propia para continuar:
+            al menos 8 caracteres, combinando letras y números.
+          </p>
+
+          <form onSubmit={enviarCambioClave}>
+            <label htmlFor="clave-actual">Contraseña actual</label>
+            <input
+              id="clave-actual" type="password" autoComplete="current-password" required
+              value={cambioClave.actual}
+              onChange={(e) => setCambioClave({ ...cambioClave, actual: e.target.value, error: "" })}
+            />
+
+            <label htmlFor="clave-nueva">Contraseña nueva</label>
+            <input
+              id="clave-nueva" type="password" autoComplete="new-password" required minLength={8}
+              value={cambioClave.nueva}
+              onChange={(e) => setCambioClave({ ...cambioClave, nueva: e.target.value, error: "" })}
+            />
+
+            <label htmlFor="clave-repetir">Repite la contraseña nueva</label>
+            <input
+              id="clave-repetir" type="password" autoComplete="new-password" required minLength={8}
+              value={cambioClave.repetir}
+              onChange={(e) => setCambioClave({ ...cambioClave, repetir: e.target.value, error: "" })}
+            />
+
+            {cambioClave.error && (
+              <div className="alert-error" role="alert" style={{ marginTop: "var(--e3)" }}>
+                {cambioClave.error}
+              </div>
+            )}
+
+            <button type="submit" style={{ marginTop: "var(--e4)" }} disabled={cambioClave.enviando}>
+              {cambioClave.enviando
+                ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Guardando…</>)
+                : "Guardar y entrar"}
+            </button>
+          </form>
+
+          <p style={{ textAlign: "center", margin: "var(--e3) 0 0" }}>
+            <button type="button" className="dash-link-btn" onClick={cerrarSesion}>
+              Cancelar y salir
+            </button>
+          </p>
+        </section>
+      </PantallaAcceso>
+    );
+  }
+
   if (!auth.logged) {
     return (
-      <main className="auth-shell">
+      <PantallaAcceso>
+        {dialogo}
         <section className="auth-card">
           <h1>Sistema de Predicción Educativa</h1>
-          <p>Inicia sesión</p>
-          <form onSubmit={onLogin}>
-            <label>Usuario</label>
-            <input value={auth.usuario} onChange={(e) => setAuth({ ...auth, usuario: e.target.value })} required />
-            <label>Contraseña</label>
-            <input type="password" value={auth.password} onChange={(e) => setAuth({ ...auth, password: e.target.value })} required />
-            <button type="submit">Iniciar Sesión</button>
-          </form>
-          <div style={{ fontSize: "0.78rem", color: "#64748b", marginTop: 6, lineHeight: 1.7 }}>
-            <div><strong>Accesos:</strong></div>
-            <div>👤 Administrador — <strong>admin</strong> / admin123 <em>(acceso completo)</em></div>
-            <div>🧠 Psicólogo — <strong>psicologo</strong> / psico123 <em>(clínico completo)</em></div>
-            <div>📚 Docente — <strong>docente</strong> / docente123 <em>(académico)</em></div>
-          </div>
-          {status.msg && <p className="status" style={{ color: status.error ? "#d62828" : "#14732b" }}>{status.msg}</p>}
+
+          {!recuperar.abierto ? (
+            <>
+              <p>Inicia sesión</p>
+              <form onSubmit={onLogin}>
+                <label htmlFor="acceso-usuario">Usuario</label>
+                <input
+                  id="acceso-usuario"
+                  autoComplete="username"
+                  value={auth.usuario}
+                  onChange={(e) => setAuth({ ...auth, usuario: e.target.value })}
+                  required
+                />
+                <label htmlFor="acceso-clave">Contraseña</label>
+                <input
+                  id="acceso-clave"
+                  type="password"
+                  autoComplete="current-password"
+                  value={auth.password}
+                  onChange={(e) => setAuth({ ...auth, password: e.target.value })}
+                  required
+                />
+                <button type="submit" style={{ marginTop: "var(--e4)" }} disabled={autenticando}>
+                  {autenticando
+                    ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Verificando…</>)
+                    : "Iniciar Sesión"}
+                </button>
+              </form>
+
+              <p style={{ textAlign: "center", margin: "var(--e3) 0 0" }}>
+                <button
+                  type="button"
+                  className="dash-link-btn"
+                  onClick={() => setRecuperar({ abierto: true, usuario: auth.usuario, resultado: null, error: "" })}
+                >
+                  ¿Olvidaste tu contraseña?
+                </button>
+              </p>
+
+              <p className="form-legend" style={{ marginTop: "var(--e4)", textAlign: "center" }}>
+                Las cuentas las asigna el administrador del sistema.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>Recuperar el acceso</p>
+
+              {!recuperar.resultado ? (
+                <form onSubmit={solicitarRecuperacion}>
+                  <p className="form-legend">
+                    Las cuentas las asigna el administrador del sistema. Indica tu usuario y te
+                    mostraremos cómo solicitar una contraseña nueva.
+                  </p>
+
+                  <label htmlFor="recuperar-usuario">Usuario</label>
+                  <input
+                    id="recuperar-usuario"
+                    autoComplete="username"
+                    aria-describedby="recuperar-ayuda"
+                    placeholder="Por ejemplo: psicologo"
+                    value={recuperar.usuario}
+                    onChange={(e) => setRecuperar({ ...recuperar, usuario: e.target.value, error: "" })}
+                    required
+                  />
+                  <span id="recuperar-ayuda" className="form-legend" style={{ marginTop: 6 }}>
+                    El mismo con el que ingresas, no tu correo.
+                  </span>
+
+                  {recuperar.error && (
+                    <div className="alert-error" role="alert" style={{ marginTop: "var(--e3)" }}>
+                      {recuperar.error}
+                    </div>
+                  )}
+
+                  <button type="submit" style={{ marginTop: "var(--e4)" }} disabled={recuperar.enviando}>
+                    {recuperar.enviando
+                      ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Registrando…</>)
+                      : "Solicitar recuperación"}
+                  </button>
+                </form>
+              ) : (
+                <div role="status" aria-live="polite">
+                  <div className="alert-success">{recuperar.resultado.mensaje}</div>
+
+                  <div className="card" style={{ marginTop: "var(--e3)" }}>
+                    <p style={{ margin: "0 0 var(--e2)", fontSize: "var(--t-md)" }}>
+                      <strong>Qué hacer ahora</strong>
+                    </p>
+                    <ol style={{ margin: 0, paddingLeft: "var(--e5)", fontSize: "var(--t-md)",
+                                 color: "var(--tinta-media)", lineHeight: 1.7 }}>
+                      <li>Comunica al administrador el código de referencia.</li>
+                      <li>El administrador repone tu contraseña y te entrega una temporal.</li>
+                      <li>Al ingresar con ella, el sistema te pedirá definir la tuya.</li>
+                    </ol>
+
+                    {recuperar.resultado.ref && (
+                      <>
+                        <p style={{ margin: "var(--e3) 0 0", fontSize: "var(--t-md)" }}>
+                          Código de referencia:{" "}
+                          <strong style={{ fontFamily: "ui-monospace, Consolas, monospace",
+                                           letterSpacing: ".04em" }}>{recuperar.resultado.ref}</strong>
+                        </p>
+                        <p className="form-legend" style={{ margin: "var(--e1) 0 0" }}>
+                          Generado el {recuperar.resultado.fecha} · vigente {recuperar.resultado.dias} días
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <p style={{ textAlign: "center", margin: "var(--e4) 0 0" }}>
+                <button type="button" className="dash-link-btn" onClick={volverAlAcceso}>
+                  ← Volver al inicio de sesión
+                </button>
+              </p>
+            </>
+          )}
+
+          {status.msg && (
+            <p
+              className={status.error ? "alert-error" : "alert-success"}
+              role={status.error ? "alert" : "status"}
+              aria-live="polite"
+              style={{ marginTop: "var(--e3)" }}
+            >
+              {status.msg}
+            </p>
+          )}
         </section>
-      </main>
+      </PantallaAcceso>
     );
   }
 
@@ -809,6 +1336,10 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {dialogo}
+      {/* Primer tabulador de la página: salta la navegación repetida. */}
+      <a className="skip-link" href="#contenido">Saltar al contenido principal</a>
+
       {/* ── Sidebar ─────────────────────────────────── */}
       <aside className="sidebar">
         <div className="sidebar-brand">
@@ -818,7 +1349,7 @@ export default function App() {
             <span>{auth.rol || "Usuario"}</span>
           </div>
         </div>
-        <nav>
+        <nav aria-label="Navegación principal">
           {viewsPermitidas.map((v) => {
             const { icon, label } = NAV_LABELS[v];
             return (
@@ -826,55 +1357,183 @@ export default function App() {
                 key={v}
                 type="button"
                 className={activeView === v ? "nav-active" : ""}
+                aria-current={activeView === v ? "page" : undefined}
                 onClick={() => goToView(v)}
               >
-                <span className="nav-icon">{icon}</span>
+                <span className="nav-icon" aria-hidden="true">{icon}</span>
                 {label}
               </button>
             );
           })}
-          <button type="button" className="danger" onClick={() => window.location.reload()}>
-            <span className="nav-icon">⊗</span>
+          <button type="button" className="danger" onClick={cerrarSesion}>
+            <span className="nav-icon" aria-hidden="true">⊗</span>
             Cerrar Sesión
           </button>
         </nav>
       </aside>
 
       {/* ── Content ─────────────────────────────────── */}
-      <section className="content">
+      <main className="content" id="contenido" tabIndex={-1}>
 
         {/* ── Dashboard ──────────────────────────────── */}
         {activeView === "dashboard" && (() => {
-          const riesgoColor = dashData
-            ? (dashData.nivel_riesgo === "Alto" ? "#ef4444" : dashData.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e")
-            : "#94a3b8";
+          const color = { Alto: "var(--alto)", Medio: "var(--medio)", Bajo: "var(--bajo)" };
+          const colorTdah = { Alta: "var(--alto)", Media: "var(--medio)", Baja: "var(--bajo)" };
 
-          // Nivel de TDAH del modelo, mostrado como Sospecha Baja/Media/Alta
-          const tdahNivel = dashData ? tdahNivelProb(dashData.nivel_tdah) : "Baja";
-          const tdahLevel = dashData ? `Probabilidad ${tdahNivel}` : null;
-          const esTdahPositivo = tdahNivel !== "Baja";
-          const tdahColor = PROB_COLORS[`Sospecha ${tdahNivel}`] ?? "#22c55e";
-          // % junto al nivel = confianza del modelo en la clase predicha
-          const tdahConf = dashData?.confianza_tdah ?? dashData?.prob_tdah ?? 0;
-          const tdahConfPct = Math.round(tdahConf * 100);
-          // Rendimiento general como nota literal (AD / A / B / C)
-          const rendLetra = dashData?.promedio_final ?? dashData?.prediccion_notas ?? "—";
-          const rendColor = (rendLetra === "AD" || rendLetra === "A") ? "#22c55e"
-            : rendLetra === "B" ? "#f97316"
-            : rendLetra === "C" ? "#ef4444" : "#94a3b8";
+          // Última predicción de cada alumno, para poder filtrar por resultado.
+          const ultimaDe = {};
+          (todosPredicciones ?? []).forEach((p) => { if (!ultimaDe[p.alumno]) ultimaDe[p.alumno] = p; });
+
+          const grados = [...new Set(alumnos.map((a) => a.grado).filter(Boolean))].sort();
+          const f = dashFiltros;
+          const texto = f.texto.trim().toLowerCase();
+
+          const alumnosFiltrados = alumnos.filter((a) => {
+            if (texto && !`${a.nombre} ${a.apellido}`.toLowerCase().includes(texto)) return false;
+            if (f.grado && a.grado !== f.grado) return false;
+            const p = ultimaDe[a.id];
+            if (f.riesgo !== "Todos" && p?.nivel_riesgo !== f.riesgo) return false;
+            if (f.tdah !== "Todos" && (!p || tdahNivelProb(p.nivel_tdah) !== f.tdah)) return false;
+            return true;
+          });
+
+          const hayFiltro = Boolean(texto) || Boolean(f.grado) || f.riesgo !== "Todos" || f.tdah !== "Todos";
+
+          // ¿El borrador difiere de lo aplicado? Sirve para avisar al usuario
+          // de que lo que ve en pantalla aún no se ha buscado.
+          const hayCambios = ["texto", "grado", "riesgo", "tdah"]
+            .some((k) => String(dashBorrador[k]).trim() !== String(dashFiltros[k]).trim());
+
+          const aplicarFiltros = () => setDashFiltros({ ...dashBorrador });
+          const limpiarFiltros = () => {
+            setDashBorrador({ ...DASH_FILTROS_VACIOS });
+            setDashFiltros({ ...DASH_FILTROS_VACIOS });
+          };
+          const idx = alumnosFiltrados.findIndex((a) => String(a.id) === String(dashAlumno));
+          const irA = (nuevoIdx) => {
+            const a = alumnosFiltrados[nuevoIdx];
+            if (!a) return;
+            setDashAlumno(String(a.id));
+            loadDashData(String(a.id));
+          };
+
+          // Media institucional del índice de riesgo: da referencia a la cifra
+          // del estudiante, que por sí sola no dice si es mucho o poco.
+          const evaluados = Object.values(ultimaDe);
+          const mediaRiesgo = evaluados.length
+            ? Math.round(evaluados.reduce((acc, p) => acc + (p.probabilidad ?? 0), 0) / evaluados.length * 100)
+            : null;
 
           const acadPieData = dashData ? buildAcadPieData(dashData.nivel_riesgo, dashData.probabilidad) : [];
-          const tdahPieData = dashData ? buildTdahPieData(tdahNivel, tdahConf) : [];
+          const tdahPieData = dashData ? buildTdahPieData(dashData) : [];
           const factoresData = dashData ? buildFactoresData(dashData) : [];
+
+          const tdahNivel = dashData ? tdahNivelProb(dashData.nivel_tdah) : "Baja";
+          const riesgo = dashData?.nivel_riesgo ?? "Bajo";
+          const rendLetra = dashData?.promedio_final ?? dashData?.prediccion_notas ?? "—";
+          const confPct = Math.round((dashData?.confianza_tdah ?? 0) * 100);
+          const riesgoPct = Math.round((dashData?.probabilidad ?? 0) * 100);
+
+          // Distribución real del modelo; null en predicciones antiguas.
+          const pr = dashData?.proba_tdah;
+          const tieneDistribucion = pr && pr.alta != null;
+          const pct = (v) => Math.round((v ?? 0) * 100);
+
+          // Evolución: el sistema guarda todas las predicciones y hasta ahora
+          // no se mostraba ninguna. Orden cronológico ascendente.
+          const serie = [...(dashHistorial ?? [])].reverse()
+            .map((p) => ({ v: Math.round((p.probabilidad ?? 0) * 100), f: p.fecha_prediccion }));
+
+          const Etiqueta = ({ children }) => (
+            <span style={{ fontSize: "var(--t-xs)", fontWeight: 700, letterSpacing: ".06em",
+                           textTransform: "uppercase", color: "var(--tinta-suave)" }}>{children}</span>
+          );
 
           return (
             <div className="dashboard">
               <h1 className="page-title">Dashboard del Estudiante</h1>
 
-              {/* Student selector */}
+              {/* Buscador y filtros: acotan la lista antes de elegir. Con 34
+                  estudiantes, encontrar «los de riesgo alto de 2°» era leer
+                  el desplegable entero (SUS, ítem 8). */}
+              <article className="panel" style={{ marginBottom: "var(--e4)" }}>
+                {/* Formulario de verdad: así «Buscar» responde también al Enter
+                    desde cualquier campo, sin atajos de teclado inventados. */}
+                <form onSubmit={(e) => { e.preventDefault(); aplicarFiltros(); }}>
+                  <div className="grid">
+                    <div className="field-group">
+                      <label htmlFor="dash-buscar">Buscar por nombre</label>
+                      <input
+                        id="dash-buscar"
+                        type="search"
+                        placeholder="Escribe un nombre o apellido…"
+                        value={dashBorrador.texto}
+                        onChange={(e) => setDashBorrador({ ...dashBorrador, texto: e.target.value })}
+                      />
+                    </div>
+                    <div className="field-group">
+                      <label htmlFor="dash-grado">Grado</label>
+                      <select id="dash-grado" value={dashBorrador.grado}
+                              onChange={(e) => setDashBorrador({ ...dashBorrador, grado: e.target.value })}>
+                        <option value="">Todos los grados</option>
+                        {grados.map((g) => <option key={g} value={g}>{g}</option>)}
+                      </select>
+                    </div>
+                    <div className="field-group">
+                      <label htmlFor="dash-friesgo">Riesgo académico</label>
+                      <select id="dash-friesgo" value={dashBorrador.riesgo}
+                              onChange={(e) => setDashBorrador({ ...dashBorrador, riesgo: e.target.value })}>
+                        <option value="Todos">Todos</option>
+                        <option value="Alto">Alto</option>
+                        <option value="Medio">Medio</option>
+                        <option value="Bajo">Bajo</option>
+                      </select>
+                    </div>
+                    <div className="field-group">
+                      <label htmlFor="dash-ftdah">Probabilidad de TDAH</label>
+                      <select id="dash-ftdah" value={dashBorrador.tdah}
+                              onChange={(e) => setDashBorrador({ ...dashBorrador, tdah: e.target.value })}>
+                        <option value="Todos">Todas</option>
+                        <option value="Alta">Alta</option>
+                        <option value="Media">Media</option>
+                        <option value="Baja">Baja</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="row" style={{ marginTop: "var(--e3)", justifyContent: "space-between", flexWrap: "wrap", gap: "var(--e2)" }}>
+                    <p className="form-legend" style={{ margin: 0 }} role="status" aria-live="polite">
+                      {hayFiltro
+                        ? `${alumnosFiltrados.length} de ${alumnos.length} estudiantes cumplen los filtros.`
+                        : `${alumnos.length} estudiantes registrados.`}
+                    </p>
+
+                    <div className="row" style={{ gap: "var(--e2)", alignItems: "center" }}>
+                      {hayCambios && (
+                        <span className="form-legend" style={{ margin: 0, color: "var(--medio)" }}>
+                          Cambios sin aplicar
+                        </span>
+                      )}
+                      <button type="submit" style={{ width: "auto", padding: "10px 22px" }}>
+                        Buscar
+                      </button>
+                      {(hayFiltro || hayCambios) && (
+                        <button type="button" className="dash-link-btn" onClick={limpiarFiltros}>
+                          Limpiar filtros
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </form>
+              </article>
+
+              {/* Selector como en la versión anterior. Se conserva el
+                  desplegable y se añade solo la asociación label/campo, que es
+                  invisible pero necesaria para lector de pantalla. */}
               <article className="panel dash-selector-panel">
-                <label className="dash-selector-label">Selecciona un Estudiante</label>
+                <label className="dash-selector-label" htmlFor="dash-alumno">Selecciona un Estudiante</label>
                 <select
+                  id="dash-alumno"
                   className="dash-selector-select"
                   value={dashAlumno}
                   onChange={(e) => {
@@ -883,151 +1542,280 @@ export default function App() {
                   }}
                 >
                   <option value="">-- Selecciona --</option>
-                  {alumnoOptions.map((o) => (
-                    <option key={o.value} value={o.value}>{o.label}</option>
+                  {alumnosFiltrados.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.nombre} {a.apellido} - {a.grado}
+                      {ultimaDe[a.id] ? ` · ${ultimaDe[a.id].nivel_riesgo}` : " · sin predicción"}
+                    </option>
                   ))}
                 </select>
+
+                {/* Recorrer la selección sin volver al desplegable cada vez. */}
+                {alumnosFiltrados.length > 1 && (
+                  <div className="row" style={{ gap: "var(--e2)" }}>
+                    <button type="button" className="lista-btn lista-btn--edit"
+                            onClick={() => irA(idx - 1)} disabled={idx <= 0}
+                            aria-label="Estudiante anterior">‹ Anterior</button>
+                    <span style={{ fontSize: "var(--t-sm)", color: "var(--tinta-suave)", whiteSpace: "nowrap" }}>
+                      {idx >= 0 ? `${idx + 1} de ${alumnosFiltrados.length}` : `${alumnosFiltrados.length} disponibles`}
+                    </span>
+                    <button type="button" className="lista-btn lista-btn--edit"
+                            onClick={() => irA(idx + 1)} disabled={idx < 0 || idx >= alumnosFiltrados.length - 1}
+                            aria-label="Estudiante siguiente">Siguiente ›</button>
+                  </div>
+                )}
               </article>
 
-              {/* No prediction for selected student */}
+              {hayFiltro && alumnosFiltrados.length === 0 && (
+                <div className="vacio">
+                  <strong>Ningún estudiante cumple los filtros</strong>
+                  <span>Prueba a quitar alguno o revisa que tengan predicción generada.</span>
+                </div>
+              )}
+
               {dashAlumno && !dashData && (
                 <p className="dash-empty">
                   No hay predicciones para este estudiante.{" "}
-                  <button
-                    type="button"
-                    className="dash-link-btn"
-                    onClick={() => goToView("predicciones")}
-                  >
+                  <button type="button" className="dash-link-btn" onClick={() => goToView("predicciones")}>
                     Generar predicción →
                   </button>
                 </p>
               )}
 
-              {/* Full dashboard when data is available */}
               {dashData && (
                 <>
-                  {/* KPI Cards */}
+                  {/* Tres tarjetas, como en la versión anterior. */}
                   <div className="kpi-row">
                     <div className="kpi-card">
-                      <div className="kpi-icon kpi-icon--person">👤</div>
+                      <div className="kpi-icon kpi-icon--person" aria-hidden="true">👤</div>
                       <div className="kpi-body">
                         <span className="kpi-label">Riesgo Académico</span>
-                        <span className="kpi-value" style={{ color: riesgoColor }}>
-                          {dashData.nivel_riesgo}
-                        </span>
+                        <span className="kpi-value" style={{ color: color[riesgo] }}>{riesgo}</span>
                         <span className="kpi-sub">
-                          Probabilidad: {Math.round(dashData.probabilidad * 100)}%
-                          <span className="kpi-arrow" style={{ color: riesgoColor }}>
-                            {dashData.nivel_riesgo === "Alto" ? " ↑" : dashData.nivel_riesgo === "Bajo" ? " ↓" : " →"}
+                          Probabilidad: {riesgoPct}%
+                          <span className="kpi-arrow" style={{ color: color[riesgo] }} aria-hidden="true">
+                            {riesgo === "Alto" ? " ↑" : riesgo === "Bajo" ? " ↓" : " →"}
                           </span>
                         </span>
                       </div>
                     </div>
 
                     <div className="kpi-card">
-                      <div className="kpi-icon kpi-icon--brain">🧠</div>
+                      <div className="kpi-icon kpi-icon--brain" aria-hidden="true">🧠</div>
                       <div className="kpi-body">
                         <span className="kpi-label">Riesgo TDAH</span>
-                        <span className="kpi-value" style={{ color: tdahColor }}>
-                          {tdahLevel}
+                        <span className="kpi-value" style={{ color: colorTdah[tdahNivel] }}>
+                          Probabilidad {tdahNivel}
                         </span>
                         <span className="kpi-sub">
-                          Probabilidad: {tdahConfPct}%
-                          <span className="kpi-arrow" style={{ color: tdahColor }}>
-                            {esTdahPositivo ? " ⚠" : " ✓"}
+                          Probabilidad: {confPct}%
+                          <span className="kpi-arrow" style={{ color: colorTdah[tdahNivel] }} aria-hidden="true">
+                            {tdahNivel !== "Baja" ? " ⚠" : " ✓"}
                           </span>
                         </span>
                       </div>
                     </div>
 
                     <div className="kpi-card">
-                      <div className="kpi-icon kpi-icon--chart">📊</div>
+                      <div className="kpi-icon kpi-icon--chart" aria-hidden="true">📊</div>
                       <div className="kpi-body">
                         <span className="kpi-label">Rendimiento General</span>
-                        <span className="kpi-value" style={{ color: rendColor }}>
-                          {rendLetra}
-                        </span>
+                        <span className="kpi-value">{rendLetra}</span>
                         <span className="kpi-sub">Promedio (nota literal)</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Donut Charts */}
+                  {/* Procedencia del dato: no altera el apartado inicial, lo
+                      acompaña. Responde al ítem 9 de SUS (confianza al usarlo). */}
+                  <p className="form-legend" style={{ marginTop: "calc(-1 * var(--e2))" }}>
+                    Predicción del {formatFecha(dashData.fecha_prediccion)} · encuesta EDAH de 20 ítems,
+                    promedio {rendLetra} y {dashData.inasistencias ?? 0} día(s) de inasistencia.
+                  </p>
+
+                  {/* ── Donas de predicción ── */}
                   <div className="charts-row">
                     <div className="chart-panel">
                       <h3 className="chart-title">Predicción Riesgo Académico</h3>
                       <ResponsiveContainer width="100%" height={220}>
                         <PieChart>
-                          <Pie
-                            data={acadPieData}
-                            cx="50%" cy="50%"
-                            innerRadius={58} outerRadius={90}
-                            paddingAngle={2}
-                            dataKey="value"
-                          >
+                          <Pie data={acadPieData} cx="50%" cy="50%" innerRadius={58} outerRadius={90}
+                               paddingAngle={2} dataKey="value" stroke="none">
                             {acadPieData.map((entry) => (
                               <Cell key={entry.name} fill={RIESGO_COLORS[entry.name]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(v) => `${v}%`} />
-                          <Legend iconType="circle" iconSize={10} />
+                          <Tooltip formatter={(v) => `${v}%`} contentStyle={{ background: "var(--superficie-2)", border: "1px solid var(--linea-fuerte)", borderRadius: 8, color: "var(--tinta)" }} />
+                          <Legend iconType="circle" iconSize={10} wrapperStyle={{ fontSize: "0.78rem", color: "var(--tinta-media)" }} />
                         </PieChart>
                       </ResponsiveContainer>
+                      <p className="form-legend" style={{ margin: 0 }}>
+                        La parte verde es lo que falta para el riesgo máximo: índice {riesgoPct} de 100.
+                      </p>
                     </div>
 
                     <div className="chart-panel">
                       <h3 className="chart-title">Predicción TDAH</h3>
                       <ResponsiveContainer width="100%" height={220}>
                         <PieChart>
-                          <Pie
-                            data={tdahPieData}
-                            cx="50%" cy="50%"
-                            innerRadius={58} outerRadius={90}
-                            paddingAngle={2}
-                            dataKey="value"
-                          >
+                          <Pie data={tdahPieData} cx="50%" cy="50%" innerRadius={58} outerRadius={90}
+                               paddingAngle={2} dataKey="value" stroke="none">
                             {tdahPieData.map((entry) => (
                               <Cell key={entry.name} fill={PROB_COLORS[entry.name]} />
                             ))}
                           </Pie>
-                          <Tooltip formatter={(v, n) => [`${v}%`, tdahTexto(n)]} />
-                          <Legend iconType="circle" iconSize={10} formatter={(value) => tdahTexto(value)} />
+                          <Tooltip formatter={(v, n) => [`${v}%`, tdahTexto(n)]} contentStyle={{ background: "var(--superficie-2)", border: "1px solid var(--linea-fuerte)", borderRadius: 8, color: "var(--tinta)" }} />
+                          <Legend iconType="circle" iconSize={10} formatter={(value) => tdahTexto(value)} wrapperStyle={{ fontSize: "0.78rem", color: "var(--tinta-media)" }} />
                         </PieChart>
                       </ResponsiveContainer>
+                      <p className="form-legend" style={{ margin: 0 }}>
+                        {tieneDistribucion
+                          ? "Cada porción es la probabilidad que el modelo asigna a esa clase. Suman 100%."
+                          : "Predicción anterior al registro de la distribución completa: solo la clase predicha y su confianza."}
+                      </p>
                     </div>
                   </div>
 
-                  {/* Factors + Recommendations */}
-                  <div className="bottom-row">
+                  <div className="charts-row">
                     <div className="chart-panel">
                       <h3 className="chart-title">Factores que Influyen en el Riesgo</h3>
                       <ResponsiveContainer width="100%" height={220}>
-                        <BarChart
-                          data={factoresData}
-                          layout="vertical"
-                          margin={{ left: 8, right: 44, top: 4, bottom: 4 }}
-                        >
-                          <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
-                          <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 12 }} />
-                          <Tooltip formatter={(v) => `${v}%`} />
-                          <Bar
-                            dataKey="valor"
-                            radius={[0, 6, 6, 0]}
-                            label={{ position: "right", formatter: (v) => `${v}%`, fontSize: 12, fill: "#334155" }}
-                          >
+                        <BarChart data={factoresData} layout="vertical"
+                                  margin={{ left: 8, right: 48, top: 4, bottom: 4 }}>
+                          <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`}
+                                 tick={{ fontSize: 11, fill: "var(--tinta-suave)" }}
+                                 axisLine={{ stroke: "var(--linea)" }} tickLine={{ stroke: "var(--linea)" }} />
+                          <YAxis type="category" dataKey="name" width={124} tickLine={false}
+                                 tick={{ fontSize: 12, fill: "var(--tinta-media)" }}
+                                 axisLine={{ stroke: "var(--linea)" }} />
+                          <Tooltip formatter={(v) => `${v}%`} cursor={{ fill: "rgba(255,255,255,.04)" }} contentStyle={{ background: "var(--superficie-2)", border: "1px solid var(--linea-fuerte)", borderRadius: 8, color: "var(--tinta)" }} />
+                          <Bar dataKey="valor" radius={[0, 6, 6, 0]}
+                               label={{ position: "right", formatter: (v) => `${v}%`, fontSize: 12, fill: "var(--tinta-media)" }}>
                             {factoresData.map((_, i) => (
                               <Cell key={i} fill={FACTOR_COLORS[i % FACTOR_COLORS.length]} />
                             ))}
                           </Bar>
                         </BarChart>
                       </ResponsiveContainer>
+                      <p className="form-legend" style={{ margin: 0 }}>
+                        Cada factor en su propia escala, expresado como porcentaje de su máximo.
+                      </p>
+                    </div>
+
+                    {/* ── El porqué, en la misma pantalla ── */}
+                    <div className="chart-panel">
+                      <h3 className="chart-title">Por qué el modelo estimó esto</h3>
+                      {dashShapCargando && (
+                        <p className="cargando" role="status" aria-live="polite">
+                          <span className="spinner" aria-hidden="true" />Calculando la explicación…
+                        </p>
+                      )}
+                      {!dashShapCargando && dashShap?.tdah?.features?.length > 0 && (
+                        <>
+                          <ShapFactores features={dashShap.tdah.features} />
+                          {dashShap.riesgo?.features?.length > 0 && (
+                            <div style={{ marginTop: "var(--e4)", paddingTop: "var(--e3)",
+                                          borderTop: "1px dashed var(--linea-fuerte)" }}>
+                              <Etiqueta>Riesgo académico</Etiqueta>
+                              <ShapFactores features={dashShap.riesgo.features} />
+                            </div>
+                          )}
+                          <p className="form-legend" style={{ marginTop: "var(--e3)", marginBottom: 0 }}>
+                            Cada barra indica cuánto empujó ese factor el resultado, en rojo hacia arriba y en verde hacia abajo.
+                          </p>
+                        </>
+                      )}
+                      {!dashShapCargando && !dashShap?.tdah?.features?.length && (
+                        <p className="form-legend" style={{ margin: 0 }}>No se pudo obtener la explicación.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="bottom-row">
+                    {/* ── Evolución: dato que ya se guardaba y nunca se mostraba ── */}
+                    <div className="chart-panel">
+                      <h3 className="chart-title">Cómo ha evolucionado su riesgo</h3>
+                      {serie.length < 2 ? (
+                        <p className="form-legend" style={{ margin: 0 }}>
+                          Solo hay una evaluación. La línea aparecerá cuando se genere una segunda,
+                          y permitirá ver si el estudiante mejora o empeora.
+                        </p>
+                      ) : (
+                        <>
+                          <svg viewBox="0 0 320 110" width="100%" height="120" role="img"
+                               aria-label={`Evolución del índice de riesgo en ${serie.length} evaluaciones, de ${serie[0].v} a ${serie[serie.length - 1].v} sobre 100`}>
+                            <line x1="0" y1="100" x2="320" y2="100" stroke="var(--linea)" strokeWidth="1" />
+                            <line x1="0" y1="10" x2="320" y2="10" stroke="var(--linea)" strokeWidth="1" strokeDasharray="3 3" />
+                            {mediaRiesgo != null && (
+                              <>
+                                <line x1="0" y1={100 - (mediaRiesgo / 100) * 90} x2="320" y2={100 - (mediaRiesgo / 100) * 90}
+                                      stroke="var(--tinta-suave)" strokeWidth="1.5" strokeDasharray="5 4" />
+                                <text x="4" y={100 - (mediaRiesgo / 100) * 90 - 5} fontSize="9" fill="var(--tinta-suave)">
+                                  media institucional {mediaRiesgo}
+                                </text>
+                              </>
+                            )}
+                            <polyline
+                              fill="none" stroke="var(--marca)" strokeWidth="2.5"
+                              strokeLinejoin="round" strokeLinecap="round"
+                              points={serie.map((p, i) =>
+                                `${(i / Math.max(1, serie.length - 1)) * 310 + 5},${100 - (p.v / 100) * 90}`).join(" ")}
+                            />
+                            {serie.map((p, i) => (
+                              <circle key={i}
+                                cx={(i / Math.max(1, serie.length - 1)) * 310 + 5}
+                                cy={100 - (p.v / 100) * 90}
+                                r={i === serie.length - 1 ? 4.5 : 3}
+                                fill={i === serie.length - 1 ? "var(--marca-oscura)" : "var(--marca)"} />
+                            ))}
+                          </svg>
+                          <div style={{ display: "flex", justifyContent: "space-between",
+                                        fontSize: "var(--t-sm)", color: "var(--tinta-suave)" }}>
+                            <span>Primera: {serie[0].v} de 100</span>
+                            <span style={{ fontWeight: 700, color: "var(--tinta)" }}>
+                              Actual: {serie[serie.length - 1].v} de 100
+                            </span>
+                          </div>
+                        </>
+                      )}
                     </div>
 
                     <div className="chart-panel">
-                      <h3 className="chart-title">Plan de Acción (analítica prescriptiva)</h3>
+                      <h3 className="chart-title">Qué se recomienda hacer</h3>
                       <RecomendacionesPanel predId={dashData.id} />
                     </div>
                   </div>
+
+                  {/* Acciones de salida: el panel deja de ser un punto muerto. */}
+                  <article className="panel" style={{ marginTop: "var(--e4)" }}>
+                    <div className="row" style={{ justifyContent: "space-between" }}>
+                      <p className="form-legend" style={{ margin: 0 }}>
+                        ¿Los datos del estudiante cambiaron? Vuelve a calcular la predicción con la información actual.
+                      </p>
+                      <div className="row" style={{ gap: "var(--e2)" }}>
+                        <button
+                          type="button"
+                          style={{ width: "auto" }}
+                          onClick={async () => {
+                            const msg = await recalcularRiesgo(dashAlumno);
+                            notify(`Predicción actualizada.${msg}`);
+                            await loadTodosPredicciones();
+                          }}
+                        >
+                          Recalcular predicción
+                        </button>
+                        {puedeVer(auth.rol, "expediente") && (
+                          <button
+                            type="button"
+                            className="lista-btn lista-btn--edit"
+                            onClick={() => { setExpAlumno(String(dashAlumno)); goToView("expediente"); }}
+                          >
+                            Ir al expediente
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </article>
                 </>
               )}
             </div>
@@ -1094,7 +1882,7 @@ export default function App() {
                   Estudiantes evaluados ({filtrados.length})
                 </h3>
                 {filtrados.length === 0 ? (
-                  <p style={{ color: "#64748b" }}>
+                  <p style={{ color: "var(--tinta-suave)" }}>
                     {filtroActivo
                       ? "Ningún estudiante cumple los filtros seleccionados."
                       : "Todavía no hay estudiantes con predicción generada."}
@@ -1126,7 +1914,7 @@ export default function App() {
                       <div key={lbl} className="kpi-card"><div className="kpi-body"><span className="kpi-label">{lbl}</span><span className="kpi-value" style={{ color: "#2563eb" }}>{(val * 100).toFixed(1)}%</span></div></div>
                     ))}
                   </div>
-                ) : <p style={{ color: "#64748b" }}>Métricas no disponibles (ejecuta el entrenamiento).</p>}
+                ) : <p style={{ color: "var(--tinta-suave)" }}>Métricas no disponibles (ejecuta el entrenamiento).</p>}
                 {metricas?.cv && (
                   <p style={{ color: "#64748b", fontSize: "0.82rem", marginTop: 8 }}>
                     Validación cruzada (5 folds): accuracy {(metricas.cv.accuracy * 100).toFixed(1)}% ± {(metricas.cv.accuracy_std * 100).toFixed(1)} · recall «Con TDAH» {(metricas.cv.recall_con_tdah * 100).toFixed(1)}%
@@ -1145,11 +1933,17 @@ export default function App() {
               <form className="grid" onSubmit={submitAlumno}>
                 <div className="field-group">
                   <label htmlFor="alumno-nombre">Nombre</label>
-                  <input id="alumno-nombre" type="text" value={alumnoForm.nombre} onChange={(e) => setAlumnoForm({ ...alumnoForm, nombre: e.target.value })} required />
+                  <input id="alumno-nombre" type="text" value={alumnoForm.nombre}
+                         pattern="[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9'\- ]*"
+                         title="Solo letras, números, espacios, apóstrofo y guion"
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, nombre: e.target.value })} required />
                 </div>
                 <div className="field-group">
                   <label htmlFor="alumno-apellido">Apellido</label>
-                  <input id="alumno-apellido" type="text" value={alumnoForm.apellido} onChange={(e) => setAlumnoForm({ ...alumnoForm, apellido: e.target.value })} required />
+                  <input id="alumno-apellido" type="text" value={alumnoForm.apellido}
+                         pattern="[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9'\- ]*"
+                         title="Solo letras, números, espacios, apóstrofo y guion"
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, apellido: e.target.value })} required />
                 </div>
                 <div className="field-group">
                   <label htmlFor="alumno-contacto">Contacto de Emergencia</label>
@@ -1160,18 +1954,70 @@ export default function App() {
                   <input id="alumno-edad" type="number" min={5} max={30} value={alumnoForm.edad} onChange={(e) => setAlumnoForm({ ...alumnoForm, edad: e.target.value })} required />
                 </div>
                 <div className="field-group">
-                  <label htmlFor="alumno-grado">Grado</label>
-                  <select id="alumno-grado" value={alumnoForm.grado} onChange={(e) => setAlumnoForm({ ...alumnoForm, grado: e.target.value })} required>
-                    <option value="">Selecciona (ej. 10mo)</option>
-                    <option value="1°">1°</option>
-                    <option value="2°">2°</option>
-                    <option value="3°">3°</option>
-                    <option value="4°">4°</option>
-                    <option value="5°">5°</option>
-                    <option value="10mo">10mo</option>
-                    <option value="11vo">11vo</option>
-                    <option value="12vo">12vo</option>
+                  <label htmlFor="alumno-nivel">Nivel</label>
+                  <select
+                    id="alumno-nivel"
+                    value={alumnoForm.nivel}
+                    onChange={(e) => setAlumnoForm({ ...alumnoForm, nivel: e.target.value, grado: "" })}
+                    required
+                  >
+                    <option value="Primaria">Primaria</option>
+                    <option value="Secundaria">Secundaria</option>
                   </select>
+                </div>
+
+                <div className="field-group">
+                  <label htmlFor="alumno-grado">Grado</label>
+                  <select
+                    id="alumno-grado"
+                    value={alumnoForm.grado}
+                    onChange={(e) => setAlumnoForm({ ...alumnoForm, grado: e.target.value })}
+                    required
+                  >
+                    <option value="">Selecciona</option>
+                    {Array.from({ length: NIVELES[alumnoForm.nivel] ?? 5 }, (_, i) => i + 1).map((g) => (
+                      <option key={g} value={g}>{g}° de {alumnoForm.nivel}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field-group">
+                  <label htmlFor="alumno-tipo-doc">Tipo de documento</label>
+                  <select
+                    id="alumno-tipo-doc"
+                    value={alumnoForm.tipo_documento}
+                    onChange={(e) => setAlumnoForm({ ...alumnoForm, tipo_documento: e.target.value, numero_documento: "" })}
+                    required
+                  >
+                    {Object.entries(TIPOS_DOCUMENTO).map(([k, v]) => (
+                      <option key={k} value={k}>{v.etiqueta}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field-group">
+                  <label htmlFor="alumno-num-doc">Número de documento</label>
+                  <input
+                    id="alumno-num-doc"
+                    type="text"
+                    inputMode={alumnoForm.tipo_documento === "PASAPORTE" ? "text" : "numeric"}
+                    maxLength={TIPOS_DOCUMENTO[alumnoForm.tipo_documento].longitud}
+                    aria-describedby="alumno-doc-ayuda"
+                    value={alumnoForm.numero_documento}
+                    onChange={(e) => {
+                      // Se filtra al teclear: dígitos siempre, letras solo en pasaporte.
+                      const permitido = alumnoForm.tipo_documento === "PASAPORTE"
+                        ? e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+                        : e.target.value.replace(/\D/g, "");
+                      setAlumnoForm({ ...alumnoForm, numero_documento: permitido });
+                    }}
+                    required
+                  />
+                  <span id="alumno-doc-ayuda" className="form-legend" style={{ marginTop: 6 }}>
+                    {TIPOS_DOCUMENTO[alumnoForm.tipo_documento].ayuda}{" "}
+                    {alumnoForm.numero_documento.length}/{TIPOS_DOCUMENTO[alumnoForm.tipo_documento].longitud}.
+                    Se guarda cifrado y solo se muestran los 4 últimos dígitos.
+                  </span>
                 </div>
                 <div className="field-group">
                   <label htmlFor="alumno-anio">Año de cursada</label>
@@ -1206,22 +2052,99 @@ export default function App() {
             return { label: "Evaluado", color: "#16a34a" };
           };
 
-          const iniciarEdicion = (a) => {
+          const iniciarEdicion = async (a) => {
+            // El grado se guarda como texto ("2° de Secundaria"); el formulario
+            // lo maneja separado en nivel + número.
+            const numeroGrado = parseInt(String(a.grado ?? "").match(/\d+/)?.[0] ?? "1", 10);
+            const nivel = /primaria/i.test(a.grado ?? "") ? "Primaria" : (a.nivel ?? "Secundaria");
+
+            // El documento está cifrado: hay que pedirlo aparte para poder editarlo.
+            let numero = "";
+            if (a.documento_enmascarado && a.documento_enmascarado !== "\u2014") {
+              try {
+                numero = (await req(`/alumnos/${a.id}/documento`)).numero ?? "";
+              } catch {
+                /* sin documento legible: el campo queda vacío y habrá que escribirlo */
+              }
+            }
+
             setListaEditAlumno(a.id);
             setListaEditForm({
               nombre: a.nombre, apellido: a.apellido, edad: a.edad,
-              grado: a.grado, anio_cursada: a.anio_cursada,
+              nivel, grado: numeroGrado, anio_cursada: a.anio_cursada,
               contacto_emergente: a.contacto_emergente,
               genero: a.genero ?? "No especificado",
+              tipo_documento: a.tipo_documento ?? "DNI",
+              numero_documento: numero,
+              // Copia del valor de partida: permite detectar un cambio de
+              // documento aunque coincidan los cuatro últimos dígitos.
+              numero_documento_previo: numero,
             });
           };
 
           const guardarEdicion = async () => {
+            const doc = TIPOS_DOCUMENTO[listaEditForm.tipo_documento ?? "DNI"];
+            const numero = (listaEditForm.numero_documento || "").trim().toUpperCase();
+            if (!RE_NOMBRE.test((listaEditForm.nombre || "").trim()) ||
+                !RE_NOMBRE.test((listaEditForm.apellido || "").trim())) {
+              setListaStatus({ msg: "El nombre y el apellido solo admiten letras, números, espacios, apóstrofo y guion.", error: true });
+              return;
+            }
+            if (!doc.patron.test(numero)) {
+              setListaStatus({ msg: `${doc.etiqueta}: ${doc.ayuda} Has escrito ${numero.length} de ${doc.longitud}.`, error: true });
+              return;
+            }
+            // El diálogo enumera exactamente qué campos cambian y con qué valores,
+            // que es lo que el usuario necesita revisar antes de aceptar.
+            const original = alumnos.find((a) => String(a.id) === String(listaEditAlumno));
+            const cambios = [];
+            const anota = (etiqueta, antes, despues) => {
+              if (String(antes ?? "") !== String(despues ?? "")) {
+                cambios.push({ etiqueta, antes: String(antes ?? "—"), valor: String(despues ?? "—") });
+              }
+            };
+            anota("Nombre", original?.nombre, listaEditForm.nombre);
+            anota("Apellido", original?.apellido, listaEditForm.apellido);
+            anota("Edad", original?.edad, listaEditForm.edad);
+            anota("Grado", original?.grado, `${listaEditForm.grado}° de ${listaEditForm.nivel}`);
+            anota("Año de cursada", original?.anio_cursada, listaEditForm.anio_cursada);
+            anota("Contacto", original?.contacto_emergente, listaEditForm.contacto_emergente);
+            anota("Género", original?.genero, listaEditForm.genero);
+            anota("Tipo de documento", original?.tipo_documento, listaEditForm.tipo_documento);
+            if ((listaEditForm.numero_documento_previo ?? "") !== numero) {
+              cambios.push({
+                etiqueta: "Documento",
+                antes: enmascararDoc(listaEditForm.numero_documento_previo),
+                valor: enmascararDoc(numero),
+              });
+            }
+
+            if (cambios.length === 0) {
+              setListaStatus({ msg: "No hay ningún cambio que guardar.", error: false });
+              return;
+            }
+
+            if (!await confirmar({
+              titulo: `¿Guardar los cambios de ${listaEditForm.nombre} ${listaEditForm.apellido}?`,
+              mensaje: cambios.length === 1
+                ? "Se modificará 1 campo del expediente del estudiante."
+                : `Se modificarán ${cambios.length} campos del expediente del estudiante.`,
+              detalles: cambios,
+              textoConfirmar: "Sí, guardar cambios",
+            })) return;
+
             try {
               await req(`/alumnos/${listaEditAlumno}/`, {
                 method: "PUT",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ ...listaEditForm, edad: Number(listaEditForm.edad), anio_cursada: Number(listaEditForm.anio_cursada) }),
+                body: JSON.stringify({
+                  ...listaEditForm,
+                  numero_documento_previo: undefined,   // auxiliar de la interfaz
+                  edad: Number(listaEditForm.edad),
+                  grado: Number(listaEditForm.grado),
+                  anio_cursada: Number(listaEditForm.anio_cursada),
+                  numero_documento: (listaEditForm.numero_documento || "").trim().toUpperCase(),
+                }),
               });
               await loadAlumnos();
               setListaEditAlumno(null);
@@ -1232,7 +2155,22 @@ export default function App() {
           };
 
           const eliminarAlumno = async (id, nombre) => {
-            if (!window.confirm(`¿Eliminar a ${nombre}? Esta acción no se puede deshacer.`)) return;
+            const victima = alumnos.find((a) => String(a.id) === String(id));
+            const suPrediccion = (todosPredicciones ?? []).filter((p) => String(p.alumno) === String(id)).length;
+            if (!await confirmar({
+              titulo: `¿Eliminar a ${nombre}?`,
+              mensaje: "Se borrará el expediente completo del estudiante. Esta acción "
+                     + "no se puede deshacer.",
+              detalles: [
+                { etiqueta: "Estudiante", valor: nombre },
+                { etiqueta: "Grado", valor: victima?.grado ?? "—" },
+                { etiqueta: "Predicciones", valor: suPrediccion === 0
+                    ? "ninguna registrada"
+                    : `${suPrediccion} en su historial` },
+              ],
+              tono: "peligro",
+              textoConfirmar: "Sí, eliminar",
+            })) return;
             try {
               await req(`/alumnos/${id}/`, { method: "DELETE" });
               await loadAlumnos();
@@ -1270,6 +2208,29 @@ export default function App() {
                       <p><b>Grado:</b> {a.grado} &nbsp; <b>Edad:</b> {a.edad}</p>
                       <p><b>Género:</b> {a.genero}</p>
                       <p><b>Año:</b> {a.anio_cursada}</p>
+                      <p>
+                        <b>{a.tipo_documento ?? "Documento"}:</b>{" "}
+                        <span style={{ fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: ".06em" }}>
+                          {docRevelado[a.id] ?? a.documento_enmascarado}
+                        </span>
+                        {a.documento_enmascarado !== "—" && !docRevelado[a.id] && (
+                          <button
+                            type="button"
+                            className="dash-link-btn"
+                            style={{ marginLeft: 10 }}
+                            onClick={async () => {
+                              try {
+                                const r = await req(`/alumnos/${a.id}/documento`);
+                                setDocRevelado((d) => ({ ...d, [a.id]: r.numero }));
+                              } catch (err) {
+                                notify(err.message || "No se pudo obtener el documento.", true);
+                              }
+                            }}
+                          >
+                            Mostrar
+                          </button>
+                        )}
+                      </p>
                       <p><b>Contacto:</b> {a.contacto_emergente}</p>
                       <p><b>Inasistencias acumuladas:</b> {a.inasistencias ?? 0} día(s)</p>
                       {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "#d62828" : pred.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {tdahTexto(pred.nivel_tdah)}</p></>}
@@ -1285,18 +2246,87 @@ export default function App() {
                   <div className="lista-modal" onClick={(e) => e.stopPropagation()}>
                     <h3 style={{ margin: "0 0 14px" }}>Editar Alumno</h3>
                     <div className="grid" style={{ gap: 10 }}>
-                      {[["Nombre", "nombre"], ["Apellido", "apellido"], ["Edad", "edad"], ["Grado", "grado"], ["Año", "anio_cursada"], ["Contacto", "contacto_emergente"]].map(([lbl, key]) => (
+                      {[["Nombre", "nombre"], ["Apellido", "apellido"], ["Edad", "edad"], ["Año", "anio_cursada"], ["Contacto", "contacto_emergente"]].map(([lbl, key]) => (
                         <div key={key} className="field-group">
-                          <label>{lbl}</label>
-                          <input value={listaEditForm[key] ?? ""} onChange={(e) => setListaEditForm({ ...listaEditForm, [key]: e.target.value })} />
+                          <label htmlFor={`edit-${key}`}>{lbl}</label>
+                          <input
+                            id={`edit-${key}`}
+                            value={listaEditForm[key] ?? ""}
+                            onChange={(e) => setListaEditForm({ ...listaEditForm, [key]: e.target.value })}
+                          />
                         </div>
                       ))}
+
                       <div className="field-group">
-                        <label>Género</label>
-                        <select value={listaEditForm.genero} onChange={(e) => setListaEditForm({ ...listaEditForm, genero: e.target.value })}>
+                        <label htmlFor="edit-nivel">Nivel</label>
+                        <select
+                          id="edit-nivel"
+                          value={listaEditForm.nivel ?? "Secundaria"}
+                          onChange={(e) => setListaEditForm({ ...listaEditForm, nivel: e.target.value, grado: 1 })}
+                        >
+                          <option value="Primaria">Primaria</option>
+                          <option value="Secundaria">Secundaria</option>
+                        </select>
+                      </div>
+
+                      <div className="field-group">
+                        <label htmlFor="edit-grado">Grado</label>
+                        <select
+                          id="edit-grado"
+                          value={listaEditForm.grado ?? 1}
+                          onChange={(e) => setListaEditForm({ ...listaEditForm, grado: e.target.value })}
+                        >
+                          {Array.from({ length: NIVELES[listaEditForm.nivel ?? "Secundaria"] ?? 5 }, (_, i) => i + 1).map((g) => (
+                            <option key={g} value={g}>{g}° de {listaEditForm.nivel ?? "Secundaria"}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="field-group">
+                        <label htmlFor="edit-tipo-doc">Tipo de documento</label>
+                        <select
+                          id="edit-tipo-doc"
+                          value={listaEditForm.tipo_documento ?? "DNI"}
+                          onChange={(e) => setListaEditForm({ ...listaEditForm, tipo_documento: e.target.value, numero_documento: "" })}
+                        >
+                          {Object.entries(TIPOS_DOCUMENTO).map(([k, v]) => (
+                            <option key={k} value={k}>{v.etiqueta}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="field-group">
+                        <label htmlFor="edit-num-doc">Número de documento</label>
+                        <input
+                          id="edit-num-doc"
+                          aria-describedby="edit-doc-ayuda"
+                          maxLength={TIPOS_DOCUMENTO[listaEditForm.tipo_documento ?? "DNI"].longitud}
+                          value={listaEditForm.numero_documento ?? ""}
+                          onChange={(e) => {
+                            const tipo = listaEditForm.tipo_documento ?? "DNI";
+                            const permitido = tipo === "PASAPORTE"
+                              ? e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+                              : e.target.value.replace(/\D/g, "");
+                            setListaEditForm({ ...listaEditForm, numero_documento: permitido });
+                          }}
+                        />
+                        <span id="edit-doc-ayuda" className="form-legend" style={{ marginTop: 6 }}>
+                          {TIPOS_DOCUMENTO[listaEditForm.tipo_documento ?? "DNI"].ayuda}{" "}
+                          {(listaEditForm.numero_documento ?? "").length}/{TIPOS_DOCUMENTO[listaEditForm.tipo_documento ?? "DNI"].longitud}
+                        </span>
+                      </div>
+
+                      <div className="field-group">
+                        <label htmlFor="edit-genero">Género</label>
+                        <select
+                          id="edit-genero"
+                          value={listaEditForm.genero}
+                          onChange={(e) => setListaEditForm({ ...listaEditForm, genero: e.target.value })}
+                        >
                           <option value="Masculino">Masculino</option>
                           <option value="Femenino">Femenino</option>
                           <option value="Otro">Otro</option>
+                          <option value="No especificado">No especificado</option>
                         </select>
                       </div>
                     </div>
@@ -1310,7 +2340,7 @@ export default function App() {
 
               <article className="panel" style={{ overflowX: "auto" }}>
                 {alumnos.length === 0 ? (
-                  <p style={{ color: "#64748b" }}>No hay alumnos registrados.</p>
+                  <p style={{ color: "var(--tinta-suave)" }}>No hay alumnos registrados.</p>
                 ) : (
                   <table className="lista-table">
                     <thead>
@@ -1320,6 +2350,7 @@ export default function App() {
                         <th>Apellido</th>
                         <th>Grado</th>
                         <th>Edad</th>
+                        <th>Documento</th>
                         <th>Inasist.</th>
                         <th>Estado</th>
                         <th>Acciones</th>
@@ -1335,6 +2366,9 @@ export default function App() {
                             <td>{a.apellido}</td>
                             <td>{a.grado}</td>
                             <td>{a.edad}</td>
+                            <td style={{ fontFamily: "ui-monospace, Consolas, monospace", whiteSpace: "nowrap" }}>
+                              {a.documento_enmascarado ?? "\u2014"}
+                            </td>
                             <td>{a.inasistencias ?? 0}</td>
                             <td><span className="lista-badge" style={{ background: est.color }}>{est.label}</span></td>
                             <td>
@@ -1478,11 +2512,106 @@ export default function App() {
           </div>
         )}
 
+        {/* ── Cuentas y accesos (solo Administrador) ──── */}
+        {activeView === "cuentas" && (
+          <div className="notas-layout">
+            <h1 className="page-title">Cuentas y accesos</h1>
+
+            <article className="panel">
+              <h2 style={{ margin: "0 0 4px", fontSize: "var(--t-lg)" }}>Solicitudes de recuperación</h2>
+              <p className="form-legend">
+                Cuando alguien olvida su contraseña, su solicitud aparece aquí. Al atenderla se genera
+                una contraseña temporal que debes entregarle en persona: el sistema no la envía por
+                ningún medio y no vuelve a mostrarla.
+              </p>
+
+              {claveRepuesta && (
+                <div className="alert-success" role="status" aria-live="polite"
+                     style={{ display: "block", marginBottom: "var(--e4)" }}>
+                  <div style={{ marginBottom: "var(--e2)" }}>{claveRepuesta.mensaje}</div>
+                  <div style={{ fontSize: "var(--t-lg)", fontWeight: 800,
+                                fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: ".08em" }}>
+                    {claveRepuesta.password_temporal}
+                  </div>
+                  <div className="form-legend" style={{ marginTop: "var(--e2)", marginBottom: 0 }}>
+                    {claveRepuesta.aviso}
+                  </div>
+                </div>
+              )}
+
+              {solicitudesCargando && (
+                <p className="cargando" role="status" aria-live="polite">
+                  <span className="spinner" aria-hidden="true" />Cargando solicitudes…
+                </p>
+              )}
+
+              {!solicitudesCargando && solicitudes.length === 0 && (
+                <div className="vacio">
+                  <strong>No hay solicitudes pendientes</strong>
+                  <span>Aparecerán aquí en cuanto alguien pida recuperar su contraseña.</span>
+                </div>
+              )}
+
+              {!solicitudesCargando && solicitudes.length > 0 && (
+                <div style={{ overflowX: "auto" }}>
+                  <table className="lista-table">
+                    <caption>{solicitudes.length} solicitud(es) por atender</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Código</th>
+                        <th scope="col">Usuario</th>
+                        <th scope="col">Nombre</th>
+                        <th scope="col">Rol</th>
+                        <th scope="col">Solicitada</th>
+                        <th scope="col">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {solicitudes.map((sol) => (
+                        <tr key={sol.id}>
+                          <td style={{ fontFamily: "ui-monospace, Consolas, monospace" }}>{sol.codigo}</td>
+                          <td><strong>{sol.usuario}</strong></td>
+                          <td>{sol.nombre}</td>
+                          <td>{sol.rol}</td>
+                          <td style={{ fontSize: "var(--t-sm)", color: "var(--tinta-suave)" }}>
+                            {formatFecha(sol.fecha_solicitud)}
+                          </td>
+                          <td>
+                            {sol.caducada ? (
+                              <span className="lista-badge" style={{ color: "var(--tinta-suave)" }}>Caducada</span>
+                            ) : (
+                              <button type="button" className="lista-btn lista-btn--ver"
+                                      onClick={() => atenderSolicitud(sol)}>
+                                Reponer contraseña
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </article>
+
+            <article className="panel" style={{ marginTop: "var(--e4)" }}>
+              <h2 style={{ margin: "0 0 4px", fontSize: "var(--t-lg)" }}>Cómo funciona</h2>
+              <p className="form-legend" style={{ marginBottom: 0 }}>
+                Las contraseñas se guardan cifradas con PBKDF2-HMAC-SHA256 y 200 000 iteraciones;
+                el sistema nunca las almacena ni las muestra en claro. La reposición la hace el
+                administrador en persona, sin correo electrónico: así el acceso no depende de un
+                servicio externo ni de que el usuario tenga cuenta de correo institucional.
+              </p>
+            </article>
+          </div>
+        )}
+
         {/* ── Control de Inasistencias ───────────────── */}
         {activeView === "inasistencias" && (
           <InasistenciasView
             alumnos={alumnos}
             notify={notify}
+            confirmar={confirmar}
             onGuardado={async () => {
               await loadAlumnos();
               await loadTodosPredicciones();
@@ -1523,7 +2652,7 @@ export default function App() {
                     {tdahTexto(p.nivel_tdah)}
                   </span>
                   {p.confianza_tdah != null && (
-                    <span style={{ color: "#475569" }}> ({(p.confianza_tdah * 100).toFixed(2)}% de confianza)</span>
+                    <span style={{ color: "var(--tinta-media)" }}> ({(p.confianza_tdah * 100).toFixed(2)}% de confianza)</span>
                   )}<br />
                   {p.total_atencion != null && (
                     <><b>Atención (DA):</b> {p.total_atencion}/15{"  "}<b>Hiperactividad (HI):</b> {p.total_hiperactividad}/15{"  "}{p.total_conducta != null && <><b>Conducta (TC):</b> {p.total_conducta}/30</>}<br /></>
@@ -1537,7 +2666,7 @@ export default function App() {
                     </small>
                   )}
                   <b>Promedio de Notas:</b> {p.prediccion_notas}<br />
-                  <small style={{ color: "#64748b" }}>📅 {formatFecha(p.fecha_prediccion)}</small>
+                  <small style={{ color: "var(--tinta-suave)" }}>📅 {formatFecha(p.fecha_prediccion)}</small>
 
                   {/* Botón SHAP */}
                   <div style={{ marginTop: 10 }}>
@@ -1562,15 +2691,15 @@ export default function App() {
 
                   {/* Panel SHAP */}
                   {isShapOpen && (
-                    <div style={{ marginTop: 12, padding: "18px 20px", background: "#f8faff", borderRadius: 10, border: "1px solid #dbe7f3" }}>
+                    <div style={{ marginTop: 12, padding: "18px 20px", background: "var(--superficie-2)", borderRadius: 10, border: "1px solid var(--linea)" }}>
                       {shapLoading ? (
                         <span style={{ color: "#64748b", fontSize: "0.88rem" }}>Generando explicación...</span>
                       ) : (shapData?.tdah || shapData?.riesgo) ? (
                         <>
-                          <p style={{ margin: "0 0 4px", fontWeight: 800, color: "#1e3a5f", fontSize: "1rem" }}>
+                          <p style={{ margin: "0 0 4px", fontWeight: 800, color: "var(--marca-oscura)", fontSize: "1rem" }}>
                             🧠 ¿Por qué el modelo predijo esto?
                           </p>
-                          <p style={{ margin: "0 0 16px", color: "#64748b", fontSize: "0.78rem" }}>
+                          <p style={{ margin: "0 0 16px", color: "var(--tinta-suave)", fontSize: "0.78rem" }}>
                             Cada barra muestra cuánto influyó cada factor.{" "}
                             <span style={{ color: "#ef4444", fontWeight: 700 }}>● rojo = aumenta</span>{"  ·  "}
                             <span style={{ color: "#22c55e", fontWeight: 700 }}>● verde = reduce</span>
@@ -1583,7 +2712,7 @@ export default function App() {
                               </p>
                               <ShapFactores features={shapData.tdah.features} />
                               {shapData.tdah.interpretacion && (
-                                <div style={{ marginTop: 10, color: "#475569", fontSize: "0.84rem", lineHeight: 1.7, background: "#fff", borderRadius: 8, padding: "10px 12px", border: "1px solid #eef2f7" }}>
+                                <div style={{ marginTop: 10, color: "var(--tinta-media)", fontSize: "0.84rem", lineHeight: 1.7, background: "var(--superficie)", borderRadius: 8, padding: "10px 12px", border: "1px solid var(--linea)" }}>
                                   {shapData.tdah.interpretacion.split("\n\n").map((para, i) => (
                                     <p key={i} style={{ margin: i === 0 ? "0 0 8px" : 0 }}>{para}</p>
                                   ))}
@@ -1599,7 +2728,7 @@ export default function App() {
                               </p>
                               <ShapFactores features={shapData.riesgo.features} />
                               {shapData.riesgo.interpretacion && (
-                                <div style={{ marginTop: 10, color: "#475569", fontSize: "0.84rem", lineHeight: 1.7, background: "#fff", borderRadius: 8, padding: "10px 12px", border: "1px solid #eef2f7" }}>
+                                <div style={{ marginTop: 10, color: "var(--tinta-media)", fontSize: "0.84rem", lineHeight: 1.7, background: "var(--superficie)", borderRadius: 8, padding: "10px 12px", border: "1px solid var(--linea)" }}>
                                   <p style={{ margin: 0 }}>{shapData.riesgo.interpretacion}</p>
                                 </div>
                               )}
@@ -1675,9 +2804,9 @@ export default function App() {
                   {(() => {
                     const prev = promedioLiteral(ASIGNATURAS_VALIDAS.map((a) => notasAsig[a]));
                     return (
-                      <div className="full" style={{ padding: "10px 14px", background: "#f1f5f9", borderRadius: 8, fontSize: "0.92rem" }}>
+                      <div className="full" style={{ padding: "10px 14px", background: "var(--superficie-2)", borderRadius: 8, fontSize: "0.92rem" }}>
                         <b>Promedio del bimestre (vista previa):</b>{" "}
-                        {prev ? <span style={{ fontWeight: 700, color: "#1e3a5f" }}>{prev.letra}</span>
+                        {prev ? <span style={{ fontWeight: 700, color: "var(--marca-oscura)" }}>{prev.letra}</span>
                               : <span style={{ color: "#94a3b8" }}>sin notas ingresadas</span>}
                       </div>
                     );
@@ -1689,6 +2818,7 @@ export default function App() {
               {notasModoLista === "actuales" && notasModoCarga === "masiva" && (
                 <CargaMasivaNotas
                   notify={notify}
+                  confirmar={confirmar}
                   onProcesado={async () => {
                     await loadAlumnos();
                     await loadTodosPredicciones();
@@ -1737,10 +2867,10 @@ export default function App() {
                             </div>
                           );
                         })}
-                        <div className="card full" style={{ background: "#eef2ff", borderColor: "#c7d2fe" }}>
+                        <div className="card full" style={{ background: "var(--superficie-2)", borderColor: "var(--linea)" }}>
                           <strong>Promedio general:</strong>{" "}
-                          <b style={{ color: "#1e3a5f", fontSize: "1.05rem" }}>{promGeneral.letra}</b>
-                          <span style={{ color: "#64748b" }}> · promedio de todos los cursos y bimestres registrados</span>
+                          <b style={{ color: "var(--marca-oscura)", fontSize: "1.05rem" }}>{promGeneral.letra}</b>
+                          <span style={{ color: "var(--tinta-suave)" }}> · promedio de todos los cursos y bimestres registrados</span>
                         </div>
                       </>
                     );
@@ -1772,9 +2902,15 @@ export default function App() {
         )}
 
         {status.msg && activeView !== "encuesta" && activeView !== "notas" && (
-          <p className="status" style={{ color: status.error ? "#d62828" : "#14732b" }}>{status.msg}</p>
+          <p
+            className={status.error ? "alert-error" : "alert-success"}
+            role={status.error ? "alert" : "status"}
+            aria-live={status.error ? "assertive" : "polite"}
+          >
+            {status.msg}
+          </p>
         )}
-      </section>
+      </main>
     </div>
   );
 }

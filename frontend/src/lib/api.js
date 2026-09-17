@@ -7,6 +7,8 @@
  * @property {string} message Mensaje legible ya extraído de `detail`.
  */
 
+import { leerToken, borrarToken } from "./sesion";
+
 export const API =
   (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000") + "/api";
 
@@ -55,14 +57,25 @@ async function mensajeDeError(res) {
  * @throws {ApiError}
  */
 export async function req(path, options = {}) {
+  // El token de sesión viaja en cada petición; sin él el backend responde 401.
+  const token = leerToken();
+  const cabeceras = { ...(options.headers || {}) };
+  if (token) cabeceras.Authorization = `Bearer ${token}`;
+
   let res;
   try {
-    res = await fetch(`${API}${path}`, { cache: "no-store", ...options });
+    res = await fetch(`${API}${path}`, { cache: "no-store", ...options, headers: cabeceras });
   } catch {
     throw new ApiError(
       "No se pudo conectar con el servidor. Verifica que el backend esté encendido.",
       0
     );
+  }
+  if (res.status === 401) {
+    // La sesión caducó o fue revocada: se limpia para que la aplicación
+    // vuelva a la pantalla de acceso en vez de quedarse a medias.
+    borrarToken();
+    throw new ApiError("Tu sesión expiró. Vuelve a iniciar sesión.", 401);
   }
   if (!res.ok) throw new ApiError(await mensajeDeError(res), res.status);
   if (res.status === 204) return /** @type {any} */ (null);

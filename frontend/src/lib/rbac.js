@@ -5,17 +5,19 @@
  * puede navegar y qué acciones puede ejecutar dentro de una vista.
  *
  * @typedef {"Administrador"|"Psicólogo"|"Docente"} Rol
- * @typedef {"dashboard"|"general"|"alumno"|"lista"|"encuesta"|"inasistencias"|"predicciones"|"notas"|"expediente"} Vista
+ * @typedef {"dashboard"|"general"|"alumno"|"lista"|"encuesta"|"inasistencias"|"predicciones"|"notas"|"expediente"|"cuentas"} Vista
  */
 
 /**
- * Orden canónico del menú lateral. "inasistencias" va inmediatamente después de
+ * Orden canónico del menú lateral. Abre "general" (el panorama del centro) y
+ * después "dashboard" (la ficha de un estudiante): del conjunto al caso, que es
+ * el orden en que se consulta. "inasistencias" va inmediatamente después de
  * "encuesta"; cada rol renderiza este mismo orden filtrado por sus permisos.
  * @type {Vista[]}
  */
 export const VISTAS = [
-  "dashboard",
   "general",
+  "dashboard",
   "alumno",
   "lista",
   "encuesta",
@@ -23,6 +25,7 @@ export const VISTAS = [
   "predicciones",
   "notas",
   "expediente",
+  "cuentas",
 ];
 
 /** @type {Record<Vista, {icon: string, label: string}>} */
@@ -36,6 +39,7 @@ export const NAV_LABELS = {
   predicciones:  { icon: "↗", label: "Historial de Predicciones" },
   notas:         { icon: "✎", label: "Subir Notas" },
   expediente:    { icon: "⊡", label: "Expediente Psicológico" },
+  cuentas:       { icon: "⚿", label: "Cuentas y accesos" },
 };
 
 /**
@@ -47,8 +51,8 @@ export const NAV_LABELS = {
 const PERMISOS = {
   "Administrador": VISTAS,
   "Docente": [
-    "dashboard",
     "general",
+    "dashboard",
     "alumno",
     "lista",
     "inasistencias",
@@ -56,8 +60,8 @@ const PERMISOS = {
     "notas",
   ],
   "Psicólogo": [
-    "dashboard",
     "general",
+    "dashboard",
     "lista",
     "encuesta",
     "predicciones",
@@ -98,5 +102,8 @@ export function puedeGestionarAlumnos(rol) {
  * @returns {Vista}
  */
 export function vistaInicial(rol) {
-  return viewsDeRol(rol)[0] ?? "dashboard";
+  const permitidas = viewsDeRol(rol);
+  // Se entra por el panorama institucional, no por la ficha individual: da
+  // contexto del conjunto antes de mirar a un estudiante concreto.
+  return permitidas.includes("general") ? "general" : (permitidas[0] ?? "dashboard");
 }

@@ -6,7 +6,7 @@ import os
 
 from database import engine, Base
 import alumnos.models  # noqa: F401 — registra todos los modelos ORM antes de create_all
-from alumnos.routers import alumnos, encuestas, notas, predicciones, expedientes
+from alumnos.routers import alumnos, encuestas, notas, predicciones, expedientes, auth
 
 # Migración: elimina tabla encuestas con esquema antiguo (A1-A10/B1-B10) para recrearla.
 # En PostgreSQL una sentencia fallida aborta la transacción, así que se comprueba el
@@ -67,7 +67,65 @@ if "alumnos" in _tablas and "inasistencias" not in _cols_alumnos:
     else:
         print("[migración] alumnos.inasistencias creada.")
 
-app = FastAPI(title="Tesis API", version="2.0.0")
+# Columnas del documento de identidad y del nivel educativo.
+for _col, _ddl in [
+    ("nivel", "ALTER TABLE alumnos ADD COLUMN nivel VARCHAR(20) DEFAULT 'Secundaria'"),
+    ("tipo_documento", "ALTER TABLE alumnos ADD COLUMN tipo_documento VARCHAR(20)"),
+    ("documento_cifrado", "ALTER TABLE alumnos ADD COLUMN documento_cifrado VARCHAR(255)"),
+    ("documento_huella", "ALTER TABLE alumnos ADD COLUMN documento_huella VARCHAR(64)"),
+]:
+    if "alumnos" in _tablas and _col not in _columnas("alumnos"):
+        with engine.connect() as _conn:
+            _conn.execute(text(_ddl))
+            _conn.commit()
+        _insp = inspect(engine)
+        print(f"[migracion] alumnos.{_col} creada.")
+
+# El índice único sobre la huella se crea aparte: si ya existe, no pasa nada.
+if "alumnos" in _tablas and "documento_huella" in _columnas("alumnos"):
+    with engine.connect() as _conn:
+        try:
+            _conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_alumnos_documento_huella "
+                "ON alumnos (documento_huella)"))
+            _conn.commit()
+        except Exception:
+            pass
+
+# Normaliza los grados heredados: convivían "2° de Secundaria" con "2°" suelto,
+# y el filtro los trataba como valores distintos porque lo eran.
+if "alumnos" in _tablas and "nivel" in _columnas("alumnos"):
+    with engine.connect() as _conn:
+        try:
+            _conn.execute(text("""
+                UPDATE alumnos
+                   SET nivel = CASE
+                         WHEN grado ILIKE '%primaria%' THEN 'Primaria'
+                         ELSE 'Secundaria'
+                       END
+                 WHERE nivel IS NULL OR nivel = ''
+            """))
+            # Los grados sin nivel explícito ("2°") pasan a la forma completa.
+            _conn.execute(text("""
+                UPDATE alumnos
+                   SET grado = TRIM(grado) || ' de ' || nivel
+                 WHERE grado NOT ILIKE '%primaria%' AND grado NOT ILIKE '%secundaria%'
+            """))
+            _conn.commit()
+            print("[migracion] grados normalizados a la forma «N° de Nivel».")
+        except Exception as _e:
+            print(f"[migracion] grados: {_e}")
+
+# Siembra las cuentas institucionales la primera vez. Conserva las
+# credenciales que ya usaba el equipo, pero marcadas para cambio obligatorio.
+from database import SessionLocal
+from alumnos.services import auth_service as _auth
+with SessionLocal() as _db:
+    _creadas = _auth.sembrar_usuarios_iniciales(_db)
+    if _creadas:
+        print(f"[auth] {_creadas} cuenta(s) creada(s) con cambio de contraseña obligatorio.")
+
+app = FastAPI(title="Tesis API", version="3.0.0")
 
 # CORS: en desarrollo se permite localhost. En producción se agregan los dominios
 # del frontend desplegado mediante la variable de entorno CORS_ORIGINS
@@ -92,11 +150,20 @@ _MEDIA_DIR = os.path.join(os.path.dirname(__file__), "media")
 os.makedirs(_MEDIA_DIR, exist_ok=True)
 app.mount("/media", StaticFiles(directory=_MEDIA_DIR), name="media")
 
-app.include_router(alumnos.router, prefix="/api")
-app.include_router(encuestas.router, prefix="/api")
-app.include_router(notas.router, prefix="/api")
-app.include_router(predicciones.router, prefix="/api")
-app.include_router(expedientes.router, prefix="/api")
+# El router de autenticación es público: sin él nadie podría iniciar sesión.
+app.include_router(auth.router, prefix="/api")
+
+# Todo lo demás exige una sesión válida. Son datos clínicos y académicos de
+# menores: no pueden quedar accesibles llamando a la API sin credenciales.
+from fastapi import Depends
+from alumnos.routers.auth import sesion_requerida
+
+_protegido = [Depends(sesion_requerida)]
+app.include_router(alumnos.router, prefix="/api", dependencies=_protegido)
+app.include_router(encuestas.router, prefix="/api", dependencies=_protegido)
+app.include_router(notas.router, prefix="/api", dependencies=_protegido)
+app.include_router(predicciones.router, prefix="/api", dependencies=_protegido)
+app.include_router(expedientes.router, prefix="/api", dependencies=_protegido)
 
 
 @app.get("/")

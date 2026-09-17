@@ -12,8 +12,9 @@ const PLANTILLA = "alumno_id,bimestre,asignatura,calificacion";
  * @param {Object} props
  * @param {() => Promise<void>|void} [props.onProcesado] Refresca datos del padre.
  * @param {(msg: string, error?: boolean) => void} [props.notify]
+ * @param {(opciones: Object) => Promise<boolean>} [props.confirmar]  Diálogo previo.
  */
-export default function CargaMasivaNotas({ onProcesado, notify }) {
+export default function CargaMasivaNotas({ onProcesado, notify, confirmar }) {
   const [archivo, setArchivo] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -37,6 +38,19 @@ export default function CargaMasivaNotas({ onProcesado, notify }) {
       setError("Selecciona un archivo CSV o Excel.");
       return;
     }
+
+    if (confirmar && !await confirmar({
+      titulo: "¿Procesar el archivo de notas?",
+      mensaje: "Cada fila se valida por separado: las correctas se guardan y las "
+             + "rechazadas se te informan con el motivo. Las notas cargadas recalculan "
+             + "el riesgo académico de los estudiantes afectados.",
+      detalles: [
+        { etiqueta: "Archivo", valor: archivo.name },
+        { etiqueta: "Tamaño", valor: `${(archivo.size / 1024).toFixed(1)} KB` },
+      ],
+      tono: "aviso",
+      textoConfirmar: "Sí, procesar",
+    })) return;
 
     setLoading(true);
     try {
@@ -62,7 +76,9 @@ export default function CargaMasivaNotas({ onProcesado, notify }) {
 
       <div className="full" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <input
+          id="archivo-notas"
           type="file"
+          aria-label="Archivo de notas en formato CSV o Excel"
           accept=".csv,.xlsx,.xlsm,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
           onChange={(e) => { setArchivo(e.target.files?.[0] ?? null); setResultado(null); setError(""); }}
           disabled={loading}
@@ -71,7 +87,7 @@ export default function CargaMasivaNotas({ onProcesado, notify }) {
         <button
           type="button"
           onClick={descargarPlantilla}
-          style={{ width: "auto", padding: "8px 14px", background: "#475569" }}
+          style={{ width: "auto", padding: "8px 14px", background: "var(--superficie-2)", color: "var(--tinta)", borderColor: "var(--linea-fuerte)" }}
         >
           ⬇ Plantilla CSV
         </button>
@@ -83,7 +99,8 @@ export default function CargaMasivaNotas({ onProcesado, notify }) {
         <div className="full">
           <div
             className={resultado.procesados > 0 ? "alert-success" : "alert-error"}
-            role="status"
+            role={resultado.procesados > 0 ? "status" : "alert"}
+            aria-live="polite"
           >
             <b>{resultado.procesados}</b> nota(s) registrada(s) ·{" "}
             <b>{resultado.rechazados}</b> fila(s) rechazada(s) ·{" "}
@@ -93,12 +110,12 @@ export default function CargaMasivaNotas({ onProcesado, notify }) {
           {resultado.errores?.length > 0 && (
             <div
               style={{
-                marginTop: 10, padding: "10px 14px", background: "#fef2f2",
-                border: "1px solid #fecaca", borderRadius: 8, maxHeight: 220, overflowY: "auto",
+                marginTop: 10, padding: "10px 14px", background: "var(--alto-suave)",
+                border: "1px solid var(--linea-fuerte)", borderRadius: 8, maxHeight: 220, overflowY: "auto",
               }}
             >
-              <b style={{ color: "#b91c1c", fontSize: "0.86rem" }}>Detalle de filas rechazadas</b>
-              <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: "#7f1d1d", fontSize: "0.82rem", lineHeight: 1.7 }}>
+              <b style={{ color: "var(--alto)", fontSize: "0.86rem" }}>Detalle de filas rechazadas</b>
+              <ul style={{ margin: "6px 0 0", paddingLeft: 18, color: "var(--tinta-media)", fontSize: "0.82rem", lineHeight: 1.7 }}>
                 {resultado.errores.map((msg, i) => <li key={i}>{msg}</li>)}
               </ul>
             </div>

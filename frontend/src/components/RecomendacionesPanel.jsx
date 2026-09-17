@@ -31,16 +31,31 @@ export default function RecomendacionesPanel({ predId, compacto = false }) {
   }, [predId]);
 
   if (!predId) {
-    return <p className="form-legend">Genera una predicción para obtener el plan de acción.</p>;
+    return (
+      <div className="vacio">
+        <strong>Todavía no hay plan de acción</strong>
+        <span>Genera la predicción del estudiante para obtener las recomendaciones.</span>
+      </div>
+    );
   }
   if (loading) {
-    return <p className="form-legend">Generando plan de acción…</p>;
+    return (
+      <p className="cargando" role="status" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        Generando plan de acción…
+      </p>
+    );
   }
   if (error) {
     return <div className="alert-error" role="alert">{error}</div>;
   }
   if (!data?.recomendaciones?.length) {
-    return <p className="form-legend">Sin recomendaciones disponibles.</p>;
+    return (
+      <div className="vacio">
+        <strong>Sin recomendaciones</strong>
+        <span>El estudiante no presenta indicadores que activen una acción.</span>
+      </div>
+    );
   }
 
   const { contexto, recomendaciones, aviso } = data;
@@ -82,9 +97,9 @@ export default function RecomendacionesPanel({ predId, compacto = false }) {
       {aviso && (
         <p
           style={{
-            marginTop: 12, padding: "10px 12px", background: "#fffbeb",
-            border: "1px solid #fde68a", borderRadius: 8,
-            color: "#92400e", fontSize: "0.76rem", lineHeight: 1.6,
+            marginTop: 12, padding: "10px 12px", background: "var(--medio-suave)",
+            border: "1px solid var(--linea-fuerte)", borderRadius: 8,
+            color: "var(--medio)", fontSize: "0.76rem", lineHeight: 1.6,
           }}
         >
           <b>Aviso: </b>{aviso}

@@ -1,0 +1,36 @@
+Guarda aquí la fotografía de la pantalla de acceso con el nombre exacto:
+
+    login.jpg
+
+Cómo guardarla desde el chat:
+  1. Clic derecho sobre la imagen → «Guardar imagen como…»
+  2. Navega hasta esta carpeta:  frontend/public
+  3. Nombre del archivo:  login.jpg   (minúsculas, extensión .jpg)
+
+Si te la descarga en PNG, renómbrala a login.jpg igualmente: el navegador
+reconoce el formato por su contenido, no por la extensión. O conviértela en
+https://squoosh.app, que además la comprime.
+
+Recomendaciones:
+  · Apaisada y de 1400 px de ancho como mínimo, para que no se vea pixelada.
+  · Por debajo de 400 KB: esta imagen se carga ANTES de iniciar sesión, así
+    que una foto de 5 MB retrasa la entrada de todos los usuarios.
+
+Cómo se trata la imagen:
+  · La columna de la fotografía es más alta que ancha. Si la imagen es
+    apaisada, manda la altura y se recortan los lados: el encuadre está
+    centrado, así que deja el motivo principal en el centro.
+  · Encima lleva un velo violeta tenue que la integra con el tema oscuro.
+  · El texto se apoya en una cortinilla degradada inferior, no en la foto,
+    de modo que sigue siendo legible aunque la imagen sea muy clara.
+    No necesitas elegir una foto oscura.
+
+Si el archivo no existe, la pantalla muestra el degradado violeta y la
+aplicación nunca se ve rota.
+
+Nota sobre privacidad:
+Una fachada o un aula vacía no plantean problema. Si algún día cambias esta
+imagen por una con rostros de estudiantes reconocibles, necesitarás el
+consentimiento informado de sus familias: la pantalla de acceso es pública y
+cualquiera que abra la URL la ve sin haber iniciado sesión. En un sistema que
+trata datos psicoeducativos de menores (Ley N.° 29733), eso importa.

@@ -18,17 +18,20 @@
  * @typedef {{tdah: FiltroTdah, riesgo: FiltroRiesgo}} FiltrosPrediccion
  */
 
+// Tonos claros: sobre fondo oscuro, los oscuros del tema claro se pierden.
 export const RIESGO_COLORS = {
-  Alto: "#ef4444",
-  Medio: "#f97316",
-  Moderado: "#f97316",
-  Bajo: "#22c55e",
+  Alto: "#f87171",
+  Medio: "#fbbf24",
+  Moderado: "#fbbf24",
+  Bajo: "#34d399",
 };
 
 export const PROB_COLORS = {
-  "Sospecha Alta": "#ef4444",
-  "Sospecha Media": "#f97316",
-  "Sospecha Baja": "#22c55e",
+  "Sospecha Alta": "#f87171",
+  "Sospecha Media": "#fbbf24",
+  "Sospecha Baja": "#34d399",
+  // Predicciones antiguas, sin la distribución completa del modelo.
+  "Resto de clases": "#434a54",
 };
 
 /** @type {FiltrosPrediccion} */

@@ -18,6 +18,16 @@ class Alumno(Base):
     # bases de datos existentes.
     condicion_social = Column(String(50), default="NINGUNA")
     genero = Column(String(30), default="No especificado")
+    # Nivel educativo, separado del grado para poder filtrar y agrupar.
+    nivel = Column(String(20), default="Secundaria")
+
+    # ── Documento de identidad ────────────────────────────────────────────
+    # El número no se guarda en claro. Ver alumnos/services/cripto_service.py:
+    # el cifrado es reversible pero no comparable, y la huella es comparable
+    # pero no reversible; hacen falta las dos.
+    tipo_documento = Column(String(20), nullable=True)      # DNI | CE | PASAPORTE
+    documento_cifrado = Column(String(255), nullable=True)
+    documento_huella = Column(String(64), unique=True, nullable=True, index=True)
     # Inasistencias acumuladas del alumno. Se registran en el módulo
     # "Control de Inasistencias" (rol Docente), NO en la encuesta EDAH: el
     # instrumento psicométrico contiene únicamente sus 20 ítems.
@@ -95,3 +105,49 @@ class ExpedientePsicologico(Base):
     nivel_preocupacion = Column(Integer, nullable=False)
     archivo_pdf = Column(String, nullable=False)
     fecha_registro = Column(DateTime, default=datetime.utcnow)
+
+
+class Usuario(Base):
+    """Cuenta de acceso al sistema.
+
+    Sustituye al diccionario de usuarios que vivía en el frontend con las
+    contraseñas en texto plano. Aquí solo se guarda el hash.
+    """
+    __tablename__ = "usuarios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario = Column(String(50), unique=True, nullable=False, index=True)
+    nombre = Column(String(120), nullable=False)
+    rol = Column(String(30), nullable=False)          # Administrador | Psicólogo | Docente
+    # PBKDF2-HMAC-SHA256 en formato "iteraciones$sal$hash", todo hexadecimal.
+    password_hash = Column(String(255), nullable=False)
+    activo = Column(Integer, default=1, nullable=False)
+    # Obliga a definir una contraseña propia en el primer ingreso y después de
+    # cada reposición hecha por el administrador.
+    debe_cambiar = Column(Integer, default=0, nullable=False)
+    ultimo_acceso = Column(DateTime, nullable=True)
+    fecha_creacion = Column(DateTime, default=datetime.utcnow)
+
+
+class Sesion(Base):
+    """Sesión activa. Permite revocar el acceso sin esperar a que caduque."""
+    __tablename__ = "sesiones"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    token = Column(String(64), unique=True, nullable=False, index=True)
+    expira = Column(DateTime, nullable=False)
+    fecha_creacion = Column(DateTime, default=datetime.utcnow)
+
+
+class SolicitudRecuperacion(Base):
+    """Petición de recuperación de contraseña, atendida por el administrador."""
+    __tablename__ = "solicitudes_recuperacion"
+
+    id = Column(Integer, primary_key=True, index=True)
+    usuario_id = Column(Integer, ForeignKey("usuarios.id"), nullable=False, index=True)
+    codigo = Column(String(30), unique=True, nullable=False, index=True)
+    estado = Column(String(20), default="pendiente", nullable=False)  # pendiente | atendida | caducada
+    fecha_solicitud = Column(DateTime, default=datetime.utcnow)
+    expira = Column(DateTime, nullable=False)
+    fecha_atencion = Column(DateTime, nullable=True)

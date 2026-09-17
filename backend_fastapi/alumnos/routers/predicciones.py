@@ -105,6 +105,12 @@ def _pred_dict(p: PrediccionAcademica, alumno_nombre: Optional[str] = None) -> d
         "total_hiperactividad": hi_total,
         "total_conducta": _campo_int(fields, "TC_total"),
         "prob_tdah": _campo_float(fields, "Prob_TDAH"),
+        # Distribución real del modelo; None en predicciones anteriores al cambio.
+        "proba_tdah": {
+            "baja": _campo_float(fields, "Proba_Baja"),
+            "media": _campo_float(fields, "Proba_Media"),
+            "alta": _campo_float(fields, "Proba_Alta"),
+        },
     }
 
 

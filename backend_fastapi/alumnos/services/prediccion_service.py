@@ -115,6 +115,10 @@ def generar_prediccion_alumno(db: Session, alumno_id: int) -> PrediccionAcademic
     nivel_tdah = tdah["nivel"]
     confianza_tdah = tdah["confianza"]
     prob_tdah = tdah["prob_tdah"]
+    # Distribución completa [P(Baja), P(Media), P(Alta)]. Se persiste para que la
+    # interfaz pueda graficar lo que el modelo realmente devuelve, en lugar de
+    # reconstruir las clases restantes a partir de la confianza.
+    p_baja, p_media, p_alta = tdah["proba"]
 
     # ── MODELO 2 — Riesgo Académico: Notas + Inasistencias + Prob_TDAH ───────
     riesgo = predecir_riesgo(pf_num, inasistencias, prob_tdah, tiene_notas=bool(todas))
@@ -135,6 +139,7 @@ def generar_prediccion_alumno(db: Session, alumno_id: int) -> PrediccionAcademic
         f"Nota_B1_Num: {mb1} | Nota_B2_Num: {mb2} | "
         f"Nota_B3_Num: {mb3} | Nota_B4_Num: {mb4} | "
         f"Promedio_Final_Num: {m_pf} | Prob_TDAH: {prob_tdah} | "
+        f"Proba_Baja: {p_baja} | Proba_Media: {p_media} | Proba_Alta: {p_alta} | "
         f"Confianza_TDAH: {confianza_tdah} | Nivel_TDAH: {nivel_tdah} | "
         f"Referencia_Psicometrica: {referencia_psicometrica}"
     )
