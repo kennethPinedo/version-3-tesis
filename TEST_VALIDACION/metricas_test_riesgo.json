@@ -1,6 +1,6 @@
 {
-  "n": 15,
-  "accuracy": 0.8667,
+  "n": 25,
+  "accuracy": 0.84,
   "matriz_confusion": {
     "clases": [
       "Bajo",
@@ -9,32 +9,40 @@
     ],
     "matriz": [
       [
-        11,
-        0,
-        0
-      ],
-      [
-        2,
+        15,
         2,
         0
       ],
       [
-        0,
-        0,
+        2,
+        5,
         0
+      ],
+      [
+        0,
+        0,
+        1
       ]
     ]
   },
   "por_clase": {
     "Bajo": {
-      "precision": 0.8462,
-      "recall": 1.0,
-      "f1-score": 0.9167
+      "precision": 0.8824,
+      "recall": 0.8824,
+      "f1-score": 0.8824,
+      "soporte": 17
     },
     "Medio": {
+      "precision": 0.7143,
+      "recall": 0.7143,
+      "f1-score": 0.7143,
+      "soporte": 7
+    },
+    "Alto": {
       "precision": 1.0,
-      "recall": 0.5,
-      "f1-score": 0.6667
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "soporte": 1
     }
   }
 }

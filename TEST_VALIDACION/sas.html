@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { background-color: #f8fafc; font-family: 'Segoe UI', sans-serif; padding: 20px; }
+  .table-container { width: 1000px; margin: auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+  table { width: 100%; border-collapse: collapse; }
+  th { background-color: #1e293b; color: white; padding: 12px; text-align: left; font-size: 14px; }
+  td { padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #334155; }
+  tr:nth-child(even) { background-color: #f1f5f9; }
+  .action-col { font-weight: bold; color: #0f172a; }
+</style>
+</head>
+<body>
+<div class="table-container">
+  <table>
+    <thead>
+      <tr>
+        <th>No.</th><th>Action</th><th>Description</th><th>Responsible</th><th>Deliverable</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td class="action-col">GLPI Installation</td><td>Install platform & initial config.</td><td>IT Admin</td><td>Platform operational</td></tr>
+      <tr><td>2</td><td class="action-col">User/Role Config</td><td>Profiles, permissions & responsibilities.</td><td>IT Admin</td><td>Roles configured</td></tr>
+      <tr><td>3</td><td class="action-col">Service Catalog</td><td>Service log, categories & priorities.</td><td>IT Admin</td><td>Catalog implemented</td></tr>
+      <tr><td>4</td><td class="action-col">SLA/OLA Config</td><td>Parameterization of response/resolution times.</td><td>IT Admin</td><td>SLA/OLA configured</td></tr>
+      <tr><td>5</td><td class="action-col">ITIL Setup</td><td>Service Desk, Incident, Problem, Change & SLM.</td><td>IT Admin</td><td>Configured processes</td></tr>
+      <tr><td>6</td><td class="action-col">Data Migration</td><td>Register users, assets & operational data.</td><td>IT Admin</td><td>Data in GLPI</td></tr>
+      <tr><td>7</td><td class="action-col">User Training</td><td>Training on GLPI & new procedures.</td><td>IT Admin</td><td>Trained personnel</td></tr>
+      <tr><td>8</td><td class="action-col">Functional Tests</td><td>Validation of processes & platform.</td><td>IT Team</td><td>Test report</td></tr>
+      <tr><td>9</td><td class="action-col">Production Launch</td><td>Official start of GLPI operation.</td><td>IT Admin</td><td>System in production</td></tr>
+      <tr><td>10</td><td class="action-col">Initial Follow-up</td><td>Monitoring performance & incident handling.</td><td>IT Admin</td><td>Monitoring report</td></tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>
