@@ -108,7 +108,20 @@ actives las alertas de facturación **a mano y antes**:
 
 ## 4. Crear la infraestructura
 
-Desde la raíz del repositorio:
+### Camino corto (recomendado)
+
+```bash
+bash deploy/aws/crear-infraestructura.sh
+```
+
+Comprueba los requisitos, descubre la VPC y las subredes por su cuenta, crea el
+par de claves SSH si no existe, restringe el acceso a tu IP, genera la
+contraseña de la base, **te muestra lo que vas a pagar y pide confirmación**
+antes de crear nada. Si la pila ya existe, lo dice y no la duplica.
+
+### Camino manual
+
+Si prefieres controlar cada parámetro, desde la raíz del repositorio:
 
 ```bash
 aws cloudformation create-stack \
@@ -298,6 +311,7 @@ aws cloudformation delete-stack --stack-name tesis-tdah
 
 | Archivo | Para qué |
 |---|---|
+| `crear-infraestructura.sh` | Crea toda la pila: comprueba, avisa del coste y ejecuta |
 | `infraestructura.yaml` | Define los 15 recursos de AWS |
 | `Dockerfile` | Imagen del backend (construir desde la raíz del repo) |
 | `docker-compose.yml` | Cómo corren nginx y la API en la instancia |
