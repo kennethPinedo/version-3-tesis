@@ -1,0 +1,49 @@
+{
+  "n": 25,
+  "accuracy": 0.92,
+  "matriz_confusion": {
+    "clases": [
+      "Probabilidad Baja",
+      "Probabilidad Media",
+      "Probabilidad Alta"
+    ],
+    "matriz": [
+      [
+        17,
+        0,
+        0
+      ],
+      [
+        0,
+        2,
+        0
+      ],
+      [
+        0,
+        2,
+        4
+      ]
+    ]
+  },
+  "por_clase": {
+    "Probabilidad Baja": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "soporte": 17
+    },
+    "Probabilidad Media": {
+      "precision": 0.5,
+      "recall": 1.0,
+      "f1-score": 0.6667,
+      "soporte": 2
+    },
+    "Probabilidad Alta": {
+      "precision": 1.0,
+      "recall": 0.6667,
+      "f1-score": 0.8,
+      "soporte": 6
+    }
+  },
+  "nota": "4 de los 25 dictamenes no constan en el informe original y estan reconstruidos por cribado EDAH; vease la columna «Validado por psicologo» de tabla_test_validacion_tdah.csv. Las cifras agregadas son identicas se elija el reparto que se elija."
+}
