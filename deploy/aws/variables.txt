@@ -1,0 +1,25 @@
+# Variables del despliegue AWS (EC2 + RDS + S3/CloudFront)
+#
+# Esto es una PLANTILLA. Los valores reales van en /opt/tesis/entorno.env
+# dentro de la instancia, que NO está en el repositorio.
+
+# ── En la instancia EC2: /opt/tesis/entorno.env ─────────────────────────────
+
+# Salida «EndpointBaseDatos» de la pila, con la clave que elegiste al crearla.
+DATABASE_URL=postgresql://tesisadmin:CLAVE@ENDPOINT.rds.amazonaws.com:5432/estudiantes
+
+# Salida «UrlAplicacion» de la pila (el dominio de CloudFront).
+CORS_ORIGINS=https://XXXXXXXX.cloudfront.net
+
+# LAS MISMAS que en Render y en tu .env local. Si migras los datos de Neon a
+# RDS con otras claves, los documentos de identidad quedan ilegibles.
+DOCUMENTO_KEY=
+DOCUMENTO_PEPPER=
+
+# Vacío: en AWS no hay previews que autorizar.
+CORS_ORIGIN_REGEX=
+
+# ── Al compilar el frontend (no va en la instancia) ─────────────────────────
+
+# Salida «UrlApi». SIN «/api» al final.
+VITE_API_URL=http://IP-DEL-SERVIDOR

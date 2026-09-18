@@ -1,0 +1,466 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >
+  Sistema de detección temprana de TDAH y predicción de riesgo académico.
+  Capa de tecnología sobre AWS: instancia EC2 con el backend FastAPI en Docker,
+  base de datos PostgreSQL en RDS, y el frontend React servido desde S3 a través
+  de CloudFront.
+
+  Esta plantilla crea recursos que SE FACTURAN. Antes de lanzarla, revisa la
+  estimación de costes del README de esta carpeta.
+
+# ══════════════════════════════════════════════════════════════════════════════
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: "Red (usa la VPC por defecto si no sabes qué poner)"}
+        Parameters: [VpcId, SubnetIds]
+      - Label: {default: "Acceso"}
+        Parameters: [ClaveSSH, IpAdministracion]
+      - Label: {default: "Servidor de aplicaciones"}
+        Parameters: [TipoInstancia]
+      - Label: {default: "Base de datos"}
+        Parameters: [ClaseBaseDatos, UsuarioBD, ClaveBD]
+      - Label: {default: "Nombres"}
+        Parameters: [Proyecto]
+
+# ══════════════════════════════════════════════════════════════════════════════
+Parameters:
+
+  Proyecto:
+    Type: String
+    Default: tesis-tdah
+    AllowedPattern: "[a-z0-9-]{3,24}"
+    Description: >
+      Prefijo de todos los recursos. Solo minúsculas, dígitos y guiones: forma
+      parte del nombre del bucket de S3, que es global y no admite mayúsculas.
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >
+      VPC donde vivirán la instancia y la base de datos. Si no has creado
+      ninguna, elige la marcada como «default».
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: >
+      Dos subredes en ZONAS DE DISPONIBILIDAD DISTINTAS. RDS lo exige aunque la
+      base sea de una sola instancia. La primera es donde se crea la EC2.
+
+  ClaveSSH:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: >
+      Par de claves para entrar por SSH a la instancia. Si no tienes ninguno,
+      créalo antes en EC2 → Key Pairs y descarga el archivo .pem.
+
+  IpAdministracion:
+    Type: String
+    Default: 0.0.0.0/0
+    AllowedPattern: "^(\\d{1,3}\\.){3}\\d{1,3}/\\d{1,2}$"
+    Description: >
+      Desde qué dirección se permite SSH, en formato CIDR. PON LA TUYA
+      (busca «cuál es mi ip» y añade /32). El valor por defecto abre el puerto
+      22 a todo Internet: cómodo para empezar, mala idea para dejarlo así.
+
+  TipoInstancia:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    Description: >
+      t3.small (2 GB) es lo recomendado: xgboost, shap y scipy juntos ocupan
+      varios cientos de MB, y en t3.micro (1 GB) el servicio queda al límite y
+      puede morir por falta de memoria al generar una predicción. t3.micro
+      funciona si aceptas apoyarte en el archivo de intercambio (más lento).
+
+  ClaseBaseDatos:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues: [db.t4g.micro, db.t4g.small]
+    Description: Tamaño de la instancia de RDS. db.t4g.micro sobra para 35 alumnos.
+
+  UsuarioBD:
+    Type: String
+    Default: tesisadmin
+    AllowedPattern: "[a-zA-Z][a-zA-Z0-9]{3,15}"
+    Description: Usuario administrador de PostgreSQL. No puede ser «postgres» ni «admin».
+
+  ClaveBD:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    MaxLength: 41
+    AllowedPattern: "[a-zA-Z0-9!#$%&*+,.:;=?@^_~-]{12,41}"
+    Description: >
+      Contraseña de la base de datos, mínimo 12 caracteres. NoEcho: no se
+      mostrará en la consola ni en los registros. Guárdala donde puedas
+      recuperarla: se necesita para la cadena de conexión.
+
+# ══════════════════════════════════════════════════════════════════════════════
+Mappings:
+  # Amazon Linux 2023, x86_64. Se resuelve por región vía SSM más abajo, pero
+  # se deja este mapa como referencia de las regiones habituales en Perú.
+  RegionAMI:
+    us-east-1:  {Nombre: "Norte de Virginia"}
+    us-east-2:  {Nombre: "Ohio"}
+    us-west-2:  {Nombre: "Oregón"}
+    sa-east-1:  {Nombre: "São Paulo (la más cercana a Perú)"}
+
+# ══════════════════════════════════════════════════════════════════════════════
+Resources:
+
+  # ── Cortafuegos ───────────────────────────────────────────────────────────
+  # En el diagrama, el «Firewall» del colegio es externo. Estos son los grupos
+  # de seguridad de AWS, que son el cortafuegos real de cada recurso.
+
+  GrupoSeguridadApp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Servidor de aplicaciones — HTTP publico y SSH restringido
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: HTTP desde Internet (lo consume CloudFront y el navegador)
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - Description: HTTPS, cuando se instale el certificado
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - Description: SSH solo desde la IP de administracion
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref IpAdministracion
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-sg-app"}
+
+  GrupoSeguridadBD:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      # La base NO se expone a Internet: solo acepta conexiones desde la
+      # instancia de aplicaciones, identificada por su grupo de seguridad.
+      GroupDescription: PostgreSQL — accesible solo desde el servidor de aplicaciones
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: PostgreSQL desde el servidor de aplicaciones
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref GrupoSeguridadApp
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-sg-bd"}
+
+  # ── Base de datos ─────────────────────────────────────────────────────────
+
+  SubredesBD:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subredes de la base de datos de estudiantes
+      SubnetIds: !Ref SubnetIds
+
+  BaseDatos:
+    Type: AWS::RDS::DBInstance
+    # Retain: si algún día borras la pila, la base NO se destruye con ella.
+    # Es el corpus de la tesis; se prefiere pagar por un recurso olvidado a
+    # perder los datos por un comando.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      DBInstanceIdentifier: !Sub "${Proyecto}-postgres"
+      DBName: estudiantes
+      Engine: postgres
+      EngineVersion: "16.4"
+      DBInstanceClass: !Ref ClaseBaseDatos
+      AllocatedStorage: "20"
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: !Ref UsuarioBD
+      MasterUserPassword: !Ref ClaveBD
+      DBSubnetGroupName: !Ref SubredesBD
+      VPCSecurityGroups: [!Ref GrupoSeguridadBD]
+      # Sin IP pública: solo se llega desde dentro de la VPC.
+      PubliclyAccessible: false
+      MultiAZ: false                  # una sola zona: la mitad de coste
+      BackupRetentionPeriod: 7        # copias automáticas de los últimos 7 días
+      PreferredBackupWindow: "07:00-08:00"          # 02:00-03:00 hora de Perú
+      PreferredMaintenanceWindow: "Sun:08:00-Sun:09:00"
+      DeletionProtection: true        # impide borrarla por accidente
+      EnablePerformanceInsights: false
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-bd-estudiantes"}
+
+  # ── Almacenamiento ────────────────────────────────────────────────────────
+
+  BucketFrontend:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Proyecto}-frontend-${AWS::AccountId}"
+      # Nadie accede al bucket directamente: solo CloudFront, con su OAC.
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-frontend"}
+
+  BucketExpedientes:
+    Type: AWS::S3::Bucket
+    # Contiene informes psicológicos de menores: nunca se borra con la pila.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${Proyecto}-expedientes-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration:
+        Status: Enabled      # un borrado accidental se puede revertir
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-expedientes"}
+
+  PoliticaBucketFrontend:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BucketFrontend
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SoloCloudFront
+            Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub "${BucketFrontend.Arn}/*"
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub "arn:aws:cloudfront::${AWS::AccountId}:distribution/${Distribucion}"
+
+  # ── Distribución del frontend ─────────────────────────────────────────────
+
+  ControlAccesoOrigen:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${Proyecto}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Distribucion:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "${Proyecto} — interfaz React"
+        Enabled: true
+        DefaultRootObject: index.html
+        PriceClass: PriceClass_100   # solo EEUU/Europa: lo más barato
+        Origins:
+          - Id: origen-s3
+            DomainName: !GetAtt BucketFrontend.RegionalDomainName
+            OriginAccessControlId: !GetAtt ControlAccesoOrigen.Id
+            S3OriginConfig: {OriginAccessIdentity: ""}
+        DefaultCacheBehavior:
+          TargetOriginId: origen-s3
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # CachingOptimized
+        CustomErrorResponses:
+          # React Router resuelve las rutas en el navegador: cualquier ruta
+          # desconocida debe devolver index.html, no un 403 de S3.
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 10
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-cdn"}
+
+  # ── Permisos de la instancia ──────────────────────────────────────────────
+
+  RolInstancia:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Permite entrar a la instancia desde la consola sin abrir SSH.
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: expedientes-en-s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Solo sobre SU bucket de expedientes, y solo estas acciones.
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "arn:aws:s3:::${Proyecto}-expedientes-${AWS::AccountId}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::${Proyecto}-expedientes-${AWS::AccountId}"
+
+  PerfilInstancia:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref RolInstancia]
+
+  # ── Servidor de aplicaciones ──────────────────────────────────────────────
+
+  ServidorAplicaciones:
+    Type: AWS::EC2::Instance
+    DependsOn: BaseDatos
+    Properties:
+      InstanceType: !Ref TipoInstancia
+      # Resuelve la última Amazon Linux 2023 de la región, sin fijar un AMI que
+      # caduque ni depender de un mapa que haya que mantener a mano.
+      ImageId: "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64}}"
+      KeyName: !Ref ClaveSSH
+      IamInstanceProfile: !Ref PerfilInstancia
+      SubnetId: !Select [0, !Ref SubnetIds]
+      SecurityGroupIds: [!Ref GrupoSeguridadApp]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 20
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          # Docker y las herramientas que necesita el despliegue.
+          dnf update -y
+          dnf install -y docker git postgresql16
+          systemctl enable --now docker
+          usermod -aG docker ec2-user
+
+          # Archivo de intercambio de 2 GB. En t3.micro es lo que evita que el
+          # proceso muera al cargar xgboost y shap; en t3.small es un colchón.
+          if [ ! -f /swapfile ]; then
+            dd if=/dev/zero of=/swapfile bs=1M count=2048
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          fi
+
+          # Carpeta persistente para los expedientes en PDF. Vive en el disco de
+          # la instancia, no dentro del contenedor, para sobrevivir a un
+          # redespliegue.
+          mkdir -p /opt/tesis/media/expedientes
+          chown -R 1000:1000 /opt/tesis/media
+
+          # Plantilla de variables de entorno. El despliegue la completa.
+          cat > /opt/tesis/entorno.env <<'ENTORNO'
+          DATABASE_URL=
+          CORS_ORIGINS=
+          DOCUMENTO_KEY=
+          DOCUMENTO_PEPPER=
+          ENTORNO
+          chmod 600 /opt/tesis/entorno.env
+
+          # Punto de conexión de la base, para no tener que buscarlo después.
+          echo "${BaseDatos.Endpoint.Address}" > /opt/tesis/endpoint-bd.txt
+
+          echo "Instancia lista. Falta desplegar el contenedor." > /opt/tesis/ESTADO
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-servidor-aplicaciones"}
+
+  # IP fija: sin esto, la dirección cambia en cada reinicio y habría que
+  # reconfigurar el frontend cada vez.
+  IpFija:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - {Key: Name, Value: !Sub "${Proyecto}-ip"}
+
+  AsociacionIp:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt IpFija.AllocationId
+      InstanceId: !Ref ServidorAplicaciones
+
+  # ── Vigilancia del gasto ──────────────────────────────────────────────────
+
+  AlarmaFacturacion:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Proyecto}-gasto-estimado"
+      AlarmDescription: >
+        Avisa cuando el gasto estimado del mes supera los 40 USD. Requiere tener
+        activadas las alertas de facturación en la cuenta (Billing → Preferences)
+        y solo funciona en la región us-east-1.
+      Namespace: AWS/Billing
+      MetricName: EstimatedCharges
+      Dimensions:
+        - {Name: Currency, Value: USD}
+      Statistic: Maximum
+      Period: 21600          # 6 horas
+      EvaluationPeriods: 1
+      Threshold: 40
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+# ══════════════════════════════════════════════════════════════════════════════
+Outputs:
+
+  IpServidor:
+    Description: IP fija del servidor de aplicaciones. Aquí se conecta por SSH.
+    Value: !Ref IpFija
+
+  UrlApi:
+    Description: >
+      Valor de VITE_API_URL para el frontend. SIN «/api» al final: el cliente
+      lo añade por su cuenta (frontend/src/lib/api.js). Si lo pones aquí, las
+      peticiones saldrían a /api/api y devolverían 404.
+    Value: !Sub "http://${IpFija}"
+
+  UrlAplicacion:
+    Description: Dirección de la aplicación. Esto es lo que abre el usuario.
+    Value: !Sub "https://${Distribucion.DomainName}"
+
+  EndpointBaseDatos:
+    Description: Host de PostgreSQL. No es accesible desde fuera de la VPC.
+    Value: !GetAtt BaseDatos.Endpoint.Address
+
+  CadenaConexion:
+    Description: >
+      DATABASE_URL para el backend, con la contraseña sustituida por un
+      marcador. Reemplaza CLAVE por la que elegiste al crear la pila.
+    Value: !Sub "postgresql://${UsuarioBD}:CLAVE@${BaseDatos.Endpoint.Address}:5432/estudiantes"
+
+  BucketFrontendNombre:
+    Description: Bucket donde se sube el resultado de «npm run build».
+    Value: !Ref BucketFrontend
+
+  BucketExpedientesNombre:
+    Description: Bucket para los informes psicológicos en PDF.
+    Value: !Ref BucketExpedientes
+
+  IdDistribucion:
+    Description: Necesario para invalidar la caché tras cada despliegue.
+    Value: !Ref Distribucion
+
+  ConexionSSH:
+    Description: Comando para entrar en el servidor.
+    Value: !Sub "ssh -i ${ClaveSSH}.pem ec2-user@${IpFija}"

@@ -14,6 +14,31 @@ router = APIRouter()
 
 CALIFICACIONES_VALIDAS = ("AD", "A", "B", "C")
 BIMESTRES_VALIDOS = (1, 2, 3, 4)
+
+# Áreas curriculares del nivel de secundaria (Currículo Nacional). El
+# formulario ofrece justo estas; el servidor tiene que exigir lo mismo, porque
+# el formulario no es una barrera: cualquiera puede llamar a la API.
+ASIGNATURAS_VALIDAS = (
+    "Desarrollo Personal, Ciudadanía y Cívica",
+    "Ciencias Sociales",
+    "Educación Física",
+    "Arte y Cultura",
+    "Comunicación",
+    "Inglés como Lengua Extranjera",
+    "Matemática",
+    "Ciencia y Tecnología",
+    "Educación para el Trabajo",
+    "Competencia Transversal",
+    "Formación Integral",
+)
+
+# Búsqueda indulgente con mayúsculas y espacios, estricta con el contenido.
+_ASIGNATURAS_NORM = {a.strip().lower(): a for a in ASIGNATURAS_VALIDAS}
+
+
+def normalizar_asignatura(valor: str):
+    """Devuelve el nombre canónico del área, o None si no pertenece al plan."""
+    return _ASIGNATURAS_NORM.get(str(valor or "").strip().lower())
 COLUMNAS_ESPERADAS = "alumno_id,bimestre,asignatura,calificacion"
 MAX_FILAS = 5000
 
@@ -23,6 +48,17 @@ class NotaCreate(BaseModel):
     asignatura: str = Field(min_length=1, max_length=100)
     calificacion_literal: str
     bimestre: int = Field(default=1, ge=1, le=4)
+
+    @field_validator("asignatura")
+    @classmethod
+    def _validar_asignatura(cls, v: str) -> str:
+        canonica = normalizar_asignatura(v)
+        if not canonica:
+            raise ValueError(
+                "El área curricular no pertenece al plan de estudios. "
+                f"Válidas: {', '.join(ASIGNATURAS_VALIDAS)}."
+            )
+        return canonica
 
     @field_validator("calificacion_literal")
     @classmethod
@@ -167,6 +203,10 @@ def _validar_fila(fila: Sequence[str], nro: int,
 
     if not crudo_asig:
         return None, f"Fila {nro}: la asignatura no puede estar vacía."
+    asignatura = normalizar_asignatura(crudo_asig)
+    if not asignatura:
+        return None, (f"Fila {nro}: el área '{crudo_asig}' no pertenece al plan de "
+                      f"estudios. Válidas: {', '.join(ASIGNATURAS_VALIDAS)}.")
 
     calificacion = crudo_calif.upper()
     if calificacion not in CALIFICACIONES_VALIDAS:
@@ -176,7 +216,7 @@ def _validar_fila(fila: Sequence[str], nro: int,
     return {
         "alumno_id": alumno_id,
         "bimestre": bimestre,
-        "asignatura": crudo_asig,
+        "asignatura": asignatura,
         "calificacion": calificacion,
     }, None
 

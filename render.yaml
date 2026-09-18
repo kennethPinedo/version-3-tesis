@@ -24,3 +24,12 @@ services:
       # Ej: https://tesis-tdah.vercel.app
       - key: CORS_ORIGINS
         sync: false
+      # Claves de cifrado del documento de identidad. Se completan en el panel
+      # con las MISMAS que usa el entorno local: son las que descifran los
+      # documentos ya guardados. Si faltan, el servidor genera unas temporales
+      # al arrancar y los documentos guardados con ellas quedan ilegibles tras
+      # el siguiente reinicio.
+      - key: DOCUMENTO_KEY
+        sync: false
+      - key: DOCUMENTO_PEPPER
+        sync: false

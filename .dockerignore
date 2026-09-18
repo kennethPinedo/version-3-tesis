@@ -1,0 +1,33 @@
+# Lo que NUNCA debe entrar en la imagen del contenedor.
+
+# Credenciales. Las variables llegan por entorno en tiempo de ejecución.
+.env
+*.env
+!.env.example
+
+# Entornos virtuales y cachés: 732 MB que la imagen reconstruye por su cuenta.
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.pyc
+
+# El frontend no va en el contenedor del backend: se sirve desde S3.
+frontend/
+node_modules/
+
+# Historial, documentos y material de la tesis.
+.git/
+.gitignore
+*.md
+TEST_VALIDACION/
+documentos/
+*.xlsx
+*.docx
+
+# Bases locales y volcados.
+*.db
+*.sqlite3
+*.sql
+
+# Expedientes ya subidos: son datos, no código.
+backend_fastapi/media/

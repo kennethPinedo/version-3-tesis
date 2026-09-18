@@ -116,6 +116,54 @@ if "alumnos" in _tablas and "nivel" in _columnas("alumnos"):
         except Exception as _e:
             print(f"[migracion] grados: {_e}")
 
+# Integridad referencial: el borrado queda BLOQUEADO mientras el alumno tenga
+# historial. Es una decision deliberada — este es el corpus de la tesis y no hay
+# copia de seguridad, asi que se prefiere un borrado que se niega a uno que se
+# lleva por delante notas, encuestas y predicciones sin vuelta atras.
+#
+# Hubo una version con ON DELETE CASCADE; esta migracion la revierte para las
+# bases donde llego a aplicarse. Quien quiera borrar un alumno debe eliminar
+# antes su historial, de forma consciente.
+#
+# El bloqueo por si solo produciria un error de integridad crudo (HTTP 500); es
+# DELETE /alumnos/{id}/ quien lo convierte en un 409 explicando que lo impide.
+if engine.dialect.name == "postgresql":
+    _restricciones = [
+        ("encuestas", "encuestas_alumno_id_fkey", "alumno_id", "alumnos"),
+        ("notas", "notas_alumno_id_fkey", "alumno_id", "alumnos"),
+        ("predicciones", "predicciones_alumno_id_fkey", "alumno_id", "alumnos"),
+        ("expedientes", "expedientes_alumno_id_fkey", "alumno_id", "alumnos"),
+        ("sesiones", "sesiones_usuario_id_fkey", "usuario_id", "usuarios"),
+        ("solicitudes_recuperacion", "solicitudes_recuperacion_usuario_id_fkey",
+         "usuario_id", "usuarios"),
+    ]
+    with engine.connect() as _conn:
+        # Solo se tocan las que quedaron en CASCADE; las demas ya estan bien.
+        _en_cascada = {
+            f[0] for f in _conn.execute(text("""
+                SELECT constraint_name
+                  FROM information_schema.referential_constraints
+                 WHERE delete_rule = 'CASCADE'
+            """))
+        }
+        _revertidas = 0
+        for _tabla, _restriccion, _columna, _padre in _restricciones:
+            if _tabla not in _tablas or _restriccion not in _en_cascada:
+                continue
+            try:
+                _conn.execute(text(
+                    f'ALTER TABLE {_tabla} DROP CONSTRAINT "{_restriccion}"'))
+                _conn.execute(text(
+                    f'ALTER TABLE {_tabla} ADD CONSTRAINT "{_restriccion}" '
+                    f'FOREIGN KEY ({_columna}) REFERENCES {_padre}(id)'))
+                _conn.commit()
+                _revertidas += 1
+            except Exception as _e:
+                _conn.rollback()
+                print(f"[migracion] restriccion de {_tabla}: {_e}")
+        if _revertidas:
+            print(f"[migracion] {_revertidas} clave(s) foranea(s) vuelven a bloquear el borrado.")
+
 # Siembra las cuentas institucionales la primera vez. Conserva las
 # credenciales que ya usaba el equipo, pero marcadas para cambio obligatorio.
 from database import SessionLocal

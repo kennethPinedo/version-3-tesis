@@ -2157,10 +2157,22 @@ export default function App() {
           const eliminarAlumno = async (id, nombre) => {
             const victima = alumnos.find((a) => String(a.id) === String(id));
             const suPrediccion = (todosPredicciones ?? []).filter((p) => String(p.alumno) === String(id)).length;
+            // Un alumno con historial no se puede borrar: el servidor lo
+            // rechaza. Se avisa aquí para no prometer algo que no va a ocurrir.
+            const tieneHistorial = suPrediccion > 0;
+
             if (!await confirmar({
-              titulo: `¿Eliminar a ${nombre}?`,
-              mensaje: "Se borrará el expediente completo del estudiante. Esta acción "
-                     + "no se puede deshacer.",
+              titulo: tieneHistorial
+                ? `${nombre} no se puede eliminar`
+                : `¿Eliminar a ${nombre}?`,
+              mensaje: tieneHistorial
+                ? "El estudiante tiene registros en su historial y el sistema no "
+                + "permite borrarlo: esos datos sostienen las predicciones y no se "
+                + "podrían recuperar. Para darlo de baja hay que retirar antes su "
+                + "historial, de forma deliberada."
+                : "Se eliminará la ficha del estudiante. No tiene historial "
+                + "asociado, así que no se pierde ningún dato de evaluación. "
+                + "Esta acción no se puede deshacer.",
               detalles: [
                 { etiqueta: "Estudiante", valor: nombre },
                 { etiqueta: "Grado", valor: victima?.grado ?? "—" },
@@ -2169,7 +2181,7 @@ export default function App() {
                     : `${suPrediccion} en su historial` },
               ],
               tono: "peligro",
-              textoConfirmar: "Sí, eliminar",
+              textoConfirmar: tieneHistorial ? "Intentar igualmente" : "Sí, eliminar",
             })) return;
             try {
               await req(`/alumnos/${id}/`, { method: "DELETE" });

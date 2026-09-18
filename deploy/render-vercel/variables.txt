@@ -1,0 +1,25 @@
+# Variables del despliegue RENDER + VERCEL + NEON
+#
+# Esto es una PLANTILLA. No pongas aquí los valores reales ni la subas con
+# ellos: este archivo sí va al repositorio.
+#
+# Los valores se escriben en los paneles de cada plataforma.
+
+# ── Render → servicio tesis-api → Environment ───────────────────────────────
+
+DATABASE_URL=postgresql://USUARIO:CLAVE@HOST.neon.tech/BASE?sslmode=require
+CORS_ORIGINS=https://TU-APP.vercel.app
+
+# Cópialas TAL CUAL de backend_fastapi/.env. No generes otras nuevas:
+# son las que descifran los documentos de identidad ya guardados.
+DOCUMENTO_KEY=
+DOCUMENTO_PEPPER=
+
+# Opcional. Vacío = solo se aceptan los dominios de CORS_ORIGINS.
+# Para permitir las previews de Vercel: https://.*\.vercel\.app
+CORS_ORIGIN_REGEX=
+
+# ── Vercel → proyecto → Settings → Environment Variables ────────────────────
+
+# SIN «/api» al final: el cliente lo añade por su cuenta.
+VITE_API_URL=https://TU-API.onrender.com

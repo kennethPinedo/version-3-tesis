@@ -6,7 +6,9 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from database import get_db
-from alumnos.models import Alumno
+from alumnos.models import (
+    Alumno, Encuesta, ExpedientePsicologico, Nota, PrediccionAcademica,
+)
 from alumnos.services import generar_prediccion_alumno
 from alumnos.services import cripto_service as cripto
 
@@ -273,6 +275,37 @@ def update_inasistencias(
 
 @router.delete("/alumnos/{alumno_id}/", status_code=204)
 def delete_alumno(alumno_id: int, db: Session = Depends(get_db)):
+    """Elimina un alumno, siempre que no tenga historial.
+
+    Un alumno con notas, encuestas, predicciones o expediente NO se puede
+    borrar: esos registros son el corpus con el que se entrenaron y validaron
+    los modelos, y no hay forma de recuperarlos. Quien quiera eliminarlo debe
+    retirar antes ese historial, deliberadamente.
+
+    La base de datos ya lo impide por integridad referencial, pero por sí sola
+    devolvería un error crudo (HTTP 500). Aquí se comprueba primero para poder
+    responder un 409 que diga exactamente qué lo está bloqueando.
+    """
     a = _get_alumno(db, alumno_id)
+
+    dependencias = [
+        ("nota", "notas", db.query(Nota).filter(Nota.alumno_id == alumno_id).count()),
+        ("encuesta", "encuestas", db.query(Encuesta).filter(Encuesta.alumno_id == alumno_id).count()),
+        ("predicción", "predicciones",
+         db.query(PrediccionAcademica).filter(PrediccionAcademica.alumno_id == alumno_id).count()),
+        ("expediente", "expedientes",
+         db.query(ExpedientePsicologico).filter(ExpedientePsicologico.alumno_id == alumno_id).count()),
+    ]
+    bloqueos = [(sing, plur, n) for sing, plur, n in dependencias if n]
+
+    if bloqueos:
+        detalle = ", ".join(f"{n} {sing if n == 1 else plur}" for sing, plur, n in bloqueos)
+        raise HTTPException(
+            status_code=409,
+            detail=(f"No se puede eliminar a {a.nombre} {a.apellido}: tiene {detalle} "
+                    f"en su historial. Retira primero esos registros si de verdad "
+                    f"quieres darlo de baja."),
+        )
+
     db.delete(a)
     db.commit()

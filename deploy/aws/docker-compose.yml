@@ -1,0 +1,50 @@
+# Cómo corre el backend dentro de la instancia EC2.
+#
+# Se copia a /opt/tesis/docker-compose.yml y se levanta con:
+#     cd /opt/tesis && docker compose up -d
+#
+# Nginx va delante por dos razones: el navegador pide el puerto 80 (no el 8000)
+# y es el punto donde luego se instala el certificado HTTPS sin tocar la API.
+
+services:
+
+  api:
+    image: tesis-api:latest
+    container_name: tesis-api
+    restart: unless-stopped
+    # Sin `ports`: no se expone al exterior. Solo nginx llega hasta aquí.
+    expose:
+      - "8000"
+    env_file:
+      - /opt/tesis/entorno.env
+    volumes:
+      # Los expedientes viven en el disco de la instancia, no dentro del
+      # contenedor: así sobreviven a cada redespliegue.
+      - /opt/tesis/media:/app/media
+    # Topes de memoria: con un límite, un pico al cargar shap mata solo al
+    # contenedor y Docker lo reinicia, en vez de tumbar la instancia entera.
+    deploy:
+      resources:
+        limits:
+          memory: 1400M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"    # sin esto, los registros acaban llenando el disco
+        max-file: "3"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: tesis-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - /opt/tesis/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
