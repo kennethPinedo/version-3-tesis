@@ -15,12 +15,17 @@
 14;Alumno 14;3;1;2;Negativo;Sospecha Baja;8.3;91.7;Probabilidad Baja;SI;Si
 15;Alumno 15;5;2;0;Negativo;Sospecha Baja;8.1;91.9;Probabilidad Baja;SI;Si
 16;Alumno 16;14;13;12;Positivo;Sospecha Alta;99.6;91.1;Probabilidad Alta;SI;Si
-18;Alumno 18;14;10;4;Positivo;Sospecha Alta;99.1;84.7;Probabilidad Alta;SI;Si
-19;Alumno 19;11;7;1;Positivo;Sospecha Media;96.8;78.4;Probabilidad Alta;NO;NO ESTA - verificar
-20;Alumno 20;13;3;1;Positivo;Sospecha Media;96.2;92.0;Probabilidad Media;SI;NO ESTA - verificar
-21;Alumno 21;9;8;6;Positivo;Sospecha Alta;95.3;60.7;Probabilidad Alta;SI;Si
-22;Alumno 22;6;11;0;Positivo;Sospecha Alta;89.9;73.0;Probabilidad Alta;SI;Si
-23;Alumno 23;2;1;0;Negativo;Sospecha Baja;3.9;96.1;Probabilidad Baja;SI;Si
-24;Alumno 24;0;0;0;Negativo;Sospecha Baja;2.5;97.5;Probabilidad Baja;SI;Si
-25;Alumno 25;1;1;0;Negativo;Sospecha Baja;2.8;97.2;Probabilidad Baja;SI;Si
-26;Alumno 26;0;0;0;Negativo;Sospecha Baja;2.5;97.5;Probabilidad Baja;SI;Si
+17;Alumno 17;14;10;4;Positivo;Sospecha Alta;99.1;84.7;Probabilidad Alta;SI;Si
+18;Alumno 18;11;7;1;Positivo;Sospecha Media;96.8;78.4;Probabilidad Alta;NO;NO ESTA - verificar
+19;Alumno 19;13;3;1;Positivo;Sospecha Media;96.2;92.0;Probabilidad Media;SI;NO ESTA - verificar
+20;Alumno 20;9;8;6;Positivo;Sospecha Alta;95.3;60.7;Probabilidad Alta;SI;Si
+21;Alumno 21;6;11;0;Positivo;Sospecha Alta;89.9;73.0;Probabilidad Alta;SI;Si
+22;Alumno 22;2;1;0;Negativo;Sospecha Baja;3.9;96.1;Probabilidad Baja;SI;Si
+23;Alumno 23;0;0;0;Negativo;Sospecha Baja;2.5;97.5;Probabilidad Baja;SI;Si
+24;Alumno 24;1;1;0;Negativo;Sospecha Baja;2.8;97.2;Probabilidad Baja;SI;Si
+25;Alumno 25;0;0;0;Negativo;Sospecha Baja;2.5;97.5;Probabilidad Baja;SI;Si
+26;Alumno 26;10;11;10;Positivo;Sospecha Alta;99.8;95.7;Probabilidad Alta;SI;Si
+27;Alumno 27;13;13;13;Positivo;Sospecha Alta;99.8;96.6;Probabilidad Alta;SI;Si
+28;Alumno 28;13;12;10;Positivo;Sospecha Alta;99.8;98.1;Probabilidad Alta;SI;Si
+29;Alumno 29;14;8;12;Positivo;Sospecha Alta;98.2;55.7;Probabilidad Alta;SI;Si
+30;Alumno 30;3;9;9;Positivo;Sospecha Baja;12.6;87.4;Probabilidad Baja;SI;Si
