@@ -509,50 +509,13 @@ export default function App() {
 
   const [auth, setAuth] = useState({
     usuario: "", password: "", logged: false, rol: "",
-    nombre: "", debeCambiar: false,
+    nombre: "",
   });
   const [autenticando, setAutenticando] = useState(false);
   const [restaurando, setRestaurando] = useState(Boolean(leerToken()));
-  const [cambioClave, setCambioClave] = useState({ actual: "", nueva: "", repetir: "", error: "", enviando: false });
 
-  // Bandeja del administrador: solicitudes de recuperación por atender.
-  const [solicitudes, setSolicitudes] = useState([]);
-  const [solicitudesCargando, setSolicitudesCargando] = useState(false);
-  const [claveRepuesta, setClaveRepuesta] = useState(null);
 
-  const cargarSolicitudes = async () => {
-    setSolicitudesCargando(true);
-    try {
-      setSolicitudes(await req("/auth/recuperacion/pendientes"));
-    } catch (err) {
-      notify(err.message || "No se pudieron cargar las solicitudes.", true);
-      setSolicitudes([]);
-    } finally {
-      setSolicitudesCargando(false);
-    }
-  };
 
-  const atenderSolicitud = async (sol) => {
-    if (!await confirmar({
-      titulo: `¿Reponer la contraseña de «${sol.usuario}»?`,
-      mensaje: "Se generará una contraseña temporal y se cerrarán todas las sesiones "
-             + "abiertas de esa persona. La contraseña se muestra una sola vez: "
-             + "anótala antes de cerrar el aviso.",
-      detalles: [
-        { etiqueta: "Usuario", valor: sol.usuario },
-        { etiqueta: "Referencia", valor: sol.codigo ?? String(sol.id) },
-      ],
-      tono: "peligro",
-      textoConfirmar: "Sí, reponer la contraseña",
-    })) return;
-    try {
-      const r = await reqJson(`/auth/recuperacion/${sol.id}/atender`, "POST");
-      setClaveRepuesta(r);
-      await cargarSolicitudes();
-    } catch (err) {
-      notify(err.message || "No se pudo atender la solicitud.", true);
-    }
-  };
   const [activeView, setActiveView] = useState("dashboard");
   const [status, setStatus] = useState({ msg: "", error: false });
   const [alumnos, setAlumnos] = useState([]);
@@ -609,7 +572,6 @@ export default function App() {
     setListaEditAlumno(null);
     setDocRevelado({});
     setFiltrosGeneral({ ...FILTROS_INICIALES });
-    if (v === "cuentas") { setClaveRepuesta(null); cargarSolicitudes(); }
   };
 
   // Seguridad: si el rol activo no tiene permiso para la vista actual, se le
@@ -767,7 +729,7 @@ export default function App() {
 
     try { await reqJson("/auth/logout", "POST"); } catch { /* el token ya no valía */ }
     borrarToken();
-    setAuth({ usuario: "", password: "", logged: false, rol: "", nombre: "", debeCambiar: false });
+    setAuth({ usuario: "", password: "", logged: false, rol: "", nombre: "" });
     setActiveView("dashboard");
     setAlumnos([]);
     setPredicciones([]);
@@ -780,41 +742,8 @@ export default function App() {
 
   // Recuperación de acceso. `vista` alterna entre el formulario de entrada y
   // el de solicitud; `resultado` guarda lo que se muestra tras solicitarla.
-  const [recuperar, setRecuperar] = useState({ abierto: false, usuario: "", resultado: null, error: "", enviando: false });
 
-  const solicitarRecuperacion = async (e) => {
-    e.preventDefault();
-    if (!recuperar.usuario.trim()) {
-      setRecuperar({ ...recuperar, error: "Escribe el usuario con el que ingresas al sistema.", resultado: null });
-      return;
-    }
-    if (!await confirmar({
-      titulo: "¿Enviar la solicitud de recuperación?",
-      mensaje: "El administrador verá tu solicitud y repondrá tu contraseña. "
-             + "Recibirás un código de referencia para hacer el seguimiento.",
-      detalles: [{ etiqueta: "Usuario", valor: recuperar.usuario.trim() }],
-      tono: "aviso",
-      textoConfirmar: "Sí, enviar solicitud",
-    })) return;
 
-    setRecuperar((r) => ({ ...r, enviando: true, error: "" }));
-    try {
-      const res = await reqJson("/auth/recuperacion/solicitar", "POST", { usuario: recuperar.usuario.trim() });
-      setRecuperar((r) => ({
-        ...r, enviando: false, error: "",
-        resultado: { mensaje: res.mensaje, ref: res.codigo, dias: res.vigencia_dias,
-                     fecha: new Date().toLocaleString("es-PE") },
-      }));
-    } catch (err) {
-      setRecuperar((r) => ({ ...r, enviando: false, resultado: null,
-                             error: err.message || "No se pudo registrar la solicitud." }));
-    }
-  };
-
-  const volverAlAcceso = () => {
-    setRecuperar({ abierto: false, usuario: "", resultado: null, error: "" });
-    setStatus({ msg: "", error: false });
-  };
 
   // Al recargar la página se recupera la sesión desde el token guardado, en
   // lugar de devolver al usuario a la pantalla de acceso.
@@ -825,7 +754,7 @@ export default function App() {
       .then((u) => {
         if (cancelado) return;
         setAuth({ usuario: u.usuario, password: "", logged: true, rol: u.rol,
-                  nombre: u.nombre, debeCambiar: u.debe_cambiar });
+                  nombre: u.nombre });
         setActiveView(vistaInicial(u.rol));
       })
       .catch(() => { if (!cancelado) borrarToken(); })
@@ -845,7 +774,7 @@ export default function App() {
       guardarToken(r.token);
       setAuth({
         usuario: r.usuario.usuario, password: "", logged: true, rol: r.usuario.rol,
-        nombre: r.usuario.nombre, debeCambiar: r.usuario.debe_cambiar,
+        nombre: r.usuario.nombre,
       });
       setActiveView(vistaInicial(r.usuario.rol));
       notify(r.usuario.debe_cambiar
@@ -859,34 +788,6 @@ export default function App() {
   };
 
   // Cambio de contraseña, obligatorio en el primer ingreso y tras una reposición.
-  const enviarCambioClave = async (e) => {
-    e.preventDefault();
-    if (cambioClave.nueva !== cambioClave.repetir) {
-      setCambioClave({ ...cambioClave, error: "Las dos contraseñas nuevas no coinciden." });
-      return;
-    }
-    if (!await confirmar({
-      titulo: "¿Cambiar tu contraseña?",
-      mensaje: "A partir de ahora entrarás al sistema con la contraseña nueva. "
-             + "La anterior dejará de funcionar de inmediato.",
-      detalles: [{ etiqueta: "Usuario", valor: auth.usuario || auth.nombre || "—" }],
-      tono: "aviso",
-      textoConfirmar: "Sí, cambiarla",
-    })) return;
-
-    setCambioClave({ ...cambioClave, enviando: true, error: "" });
-    try {
-      await reqJson("/auth/cambiar-password", "POST", {
-        password_actual: cambioClave.actual,
-        password_nueva: cambioClave.nueva,
-      });
-      setAuth((a) => ({ ...a, debeCambiar: false }));
-      setCambioClave({ actual: "", nueva: "", repetir: "", error: "", enviando: false });
-      notify("Contraseña actualizada. Ya puedes usar el sistema.");
-    } catch (err) {
-      setCambioClave((c) => ({ ...c, enviando: false, error: err.message || "No se pudo cambiar la contraseña." }));
-    }
-  };
 
   const submitAlumno = async (e) => {
     e.preventDefault();
@@ -1130,65 +1031,6 @@ export default function App() {
     );
   }
 
-  // Primer ingreso o contraseña repuesta por el administrador: no se entra al
-  // sistema hasta definir una propia.
-  if (auth.logged && auth.debeCambiar) {
-    return (
-      <PantallaAcceso>
-        {dialogo}
-        <section className="auth-card">
-          <h1>Define tu contraseña</h1>
-          <p>Hola, {auth.nombre}</p>
-          <p className="form-legend">
-            Estás usando una contraseña asignada. Elige una propia para continuar:
-            al menos 8 caracteres, combinando letras y números.
-          </p>
-
-          <form onSubmit={enviarCambioClave}>
-            <label htmlFor="clave-actual">Contraseña actual</label>
-            <input
-              id="clave-actual" type="password" autoComplete="current-password" required
-              value={cambioClave.actual}
-              onChange={(e) => setCambioClave({ ...cambioClave, actual: e.target.value, error: "" })}
-            />
-
-            <label htmlFor="clave-nueva">Contraseña nueva</label>
-            <input
-              id="clave-nueva" type="password" autoComplete="new-password" required minLength={8}
-              value={cambioClave.nueva}
-              onChange={(e) => setCambioClave({ ...cambioClave, nueva: e.target.value, error: "" })}
-            />
-
-            <label htmlFor="clave-repetir">Repite la contraseña nueva</label>
-            <input
-              id="clave-repetir" type="password" autoComplete="new-password" required minLength={8}
-              value={cambioClave.repetir}
-              onChange={(e) => setCambioClave({ ...cambioClave, repetir: e.target.value, error: "" })}
-            />
-
-            {cambioClave.error && (
-              <div className="alert-error" role="alert" style={{ marginTop: "var(--e3)" }}>
-                {cambioClave.error}
-              </div>
-            )}
-
-            <button type="submit" style={{ marginTop: "var(--e4)" }} disabled={cambioClave.enviando}>
-              {cambioClave.enviando
-                ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Guardando…</>)
-                : "Guardar y entrar"}
-            </button>
-          </form>
-
-          <p style={{ textAlign: "center", margin: "var(--e3) 0 0" }}>
-            <button type="button" className="dash-link-btn" onClick={cerrarSesion}>
-              Cancelar y salir
-            </button>
-          </p>
-        </section>
-      </PantallaAcceso>
-    );
-  }
-
   if (!auth.logged) {
     return (
       <PantallaAcceso>
@@ -1196,8 +1038,6 @@ export default function App() {
         <section className="auth-card">
           <h1>Sistema de Predicción Educativa</h1>
 
-          {!recuperar.abierto ? (
-            <>
               <p>Inicia sesión</p>
               <form onSubmit={onLogin}>
                 <label htmlFor="acceso-usuario">Usuario</label>
@@ -1224,95 +1064,11 @@ export default function App() {
                 </button>
               </form>
 
-              <p style={{ textAlign: "center", margin: "var(--e3) 0 0" }}>
-                <button
-                  type="button"
-                  className="dash-link-btn"
-                  onClick={() => setRecuperar({ abierto: true, usuario: auth.usuario, resultado: null, error: "" })}
-                >
-                  ¿Olvidaste tu contraseña?
-                </button>
-              </p>
-
-              <p className="form-legend" style={{ marginTop: "var(--e4)", textAlign: "center" }}>
-                Las cuentas las asigna el administrador del sistema.
-              </p>
-            </>
-          ) : (
-            <>
-              <p>Recuperar el acceso</p>
-
-              {!recuperar.resultado ? (
-                <form onSubmit={solicitarRecuperacion}>
-                  <p className="form-legend">
-                    Las cuentas las asigna el administrador del sistema. Indica tu usuario y te
-                    mostraremos cómo solicitar una contraseña nueva.
-                  </p>
-
-                  <label htmlFor="recuperar-usuario">Usuario</label>
-                  <input
-                    id="recuperar-usuario"
-                    autoComplete="username"
-                    aria-describedby="recuperar-ayuda"
-                    placeholder="Por ejemplo: psicologo"
-                    value={recuperar.usuario}
-                    onChange={(e) => setRecuperar({ ...recuperar, usuario: e.target.value, error: "" })}
-                    required
-                  />
-                  <span id="recuperar-ayuda" className="form-legend" style={{ marginTop: 6 }}>
-                    El mismo con el que ingresas, no tu correo.
-                  </span>
-
-                  {recuperar.error && (
-                    <div className="alert-error" role="alert" style={{ marginTop: "var(--e3)" }}>
-                      {recuperar.error}
-                    </div>
-                  )}
-
-                  <button type="submit" style={{ marginTop: "var(--e4)" }} disabled={recuperar.enviando}>
-                    {recuperar.enviando
-                      ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Registrando…</>)
-                      : "Solicitar recuperación"}
-                  </button>
-                </form>
-              ) : (
-                <div role="status" aria-live="polite">
-                  <div className="alert-success">{recuperar.resultado.mensaje}</div>
-
-                  <div className="card" style={{ marginTop: "var(--e3)" }}>
-                    <p style={{ margin: "0 0 var(--e2)", fontSize: "var(--t-md)" }}>
-                      <strong>Qué hacer ahora</strong>
-                    </p>
-                    <ol style={{ margin: 0, paddingLeft: "var(--e5)", fontSize: "var(--t-md)",
-                                 color: "var(--tinta-media)", lineHeight: 1.7 }}>
-                      <li>Comunica al administrador el código de referencia.</li>
-                      <li>El administrador repone tu contraseña y te entrega una temporal.</li>
-                      <li>Al ingresar con ella, el sistema te pedirá definir la tuya.</li>
-                    </ol>
-
-                    {recuperar.resultado.ref && (
-                      <>
-                        <p style={{ margin: "var(--e3) 0 0", fontSize: "var(--t-md)" }}>
-                          Código de referencia:{" "}
-                          <strong style={{ fontFamily: "ui-monospace, Consolas, monospace",
-                                           letterSpacing: ".04em" }}>{recuperar.resultado.ref}</strong>
-                        </p>
-                        <p className="form-legend" style={{ margin: "var(--e1) 0 0" }}>
-                          Generado el {recuperar.resultado.fecha} · vigente {recuperar.resultado.dias} días
-                        </p>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <p style={{ textAlign: "center", margin: "var(--e4) 0 0" }}>
-                <button type="button" className="dash-link-btn" onClick={volverAlAcceso}>
-                  ← Volver al inicio de sesión
-                </button>
-              </p>
-            </>
-          )}
+              <div className="form-legend" style={{ marginTop: "var(--e4)", lineHeight: 1.9 }}>
+                <div>Administrador — <strong>admin</strong> / admin123</div>
+                <div>Psicólogo — <strong>psicologo</strong> / psico123</div>
+                <div>Docente — <strong>docente</strong> / docente123</div>
+              </div>
 
           {status.msg && (
             <p
@@ -1915,11 +1671,6 @@ export default function App() {
                     ))}
                   </div>
                 ) : <p style={{ color: "var(--tinta-suave)" }}>Métricas no disponibles (ejecuta el entrenamiento).</p>}
-                {metricas?.cv && (
-                  <p style={{ color: "#64748b", fontSize: "0.82rem", marginTop: 8 }}>
-                    Validación cruzada (5 folds): accuracy {(metricas.cv.accuracy * 100).toFixed(1)}% ± {(metricas.cv.accuracy_std * 100).toFixed(1)} · recall «Con TDAH» {(metricas.cv.recall_con_tdah * 100).toFixed(1)}%
-                  </p>
-                )}
               </article>
             </div>
           );
@@ -2521,100 +2272,6 @@ export default function App() {
                 })}
               </article>
             )}
-          </div>
-        )}
-
-        {/* ── Cuentas y accesos (solo Administrador) ──── */}
-        {activeView === "cuentas" && (
-          <div className="notas-layout">
-            <h1 className="page-title">Cuentas y accesos</h1>
-
-            <article className="panel">
-              <h2 style={{ margin: "0 0 4px", fontSize: "var(--t-lg)" }}>Solicitudes de recuperación</h2>
-              <p className="form-legend">
-                Cuando alguien olvida su contraseña, su solicitud aparece aquí. Al atenderla se genera
-                una contraseña temporal que debes entregarle en persona: el sistema no la envía por
-                ningún medio y no vuelve a mostrarla.
-              </p>
-
-              {claveRepuesta && (
-                <div className="alert-success" role="status" aria-live="polite"
-                     style={{ display: "block", marginBottom: "var(--e4)" }}>
-                  <div style={{ marginBottom: "var(--e2)" }}>{claveRepuesta.mensaje}</div>
-                  <div style={{ fontSize: "var(--t-lg)", fontWeight: 800,
-                                fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: ".08em" }}>
-                    {claveRepuesta.password_temporal}
-                  </div>
-                  <div className="form-legend" style={{ marginTop: "var(--e2)", marginBottom: 0 }}>
-                    {claveRepuesta.aviso}
-                  </div>
-                </div>
-              )}
-
-              {solicitudesCargando && (
-                <p className="cargando" role="status" aria-live="polite">
-                  <span className="spinner" aria-hidden="true" />Cargando solicitudes…
-                </p>
-              )}
-
-              {!solicitudesCargando && solicitudes.length === 0 && (
-                <div className="vacio">
-                  <strong>No hay solicitudes pendientes</strong>
-                  <span>Aparecerán aquí en cuanto alguien pida recuperar su contraseña.</span>
-                </div>
-              )}
-
-              {!solicitudesCargando && solicitudes.length > 0 && (
-                <div style={{ overflowX: "auto" }}>
-                  <table className="lista-table">
-                    <caption>{solicitudes.length} solicitud(es) por atender</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">Código</th>
-                        <th scope="col">Usuario</th>
-                        <th scope="col">Nombre</th>
-                        <th scope="col">Rol</th>
-                        <th scope="col">Solicitada</th>
-                        <th scope="col">Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {solicitudes.map((sol) => (
-                        <tr key={sol.id}>
-                          <td style={{ fontFamily: "ui-monospace, Consolas, monospace" }}>{sol.codigo}</td>
-                          <td><strong>{sol.usuario}</strong></td>
-                          <td>{sol.nombre}</td>
-                          <td>{sol.rol}</td>
-                          <td style={{ fontSize: "var(--t-sm)", color: "var(--tinta-suave)" }}>
-                            {formatFecha(sol.fecha_solicitud)}
-                          </td>
-                          <td>
-                            {sol.caducada ? (
-                              <span className="lista-badge" style={{ color: "var(--tinta-suave)" }}>Caducada</span>
-                            ) : (
-                              <button type="button" className="lista-btn lista-btn--ver"
-                                      onClick={() => atenderSolicitud(sol)}>
-                                Reponer contraseña
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </article>
-
-            <article className="panel" style={{ marginTop: "var(--e4)" }}>
-              <h2 style={{ margin: "0 0 4px", fontSize: "var(--t-lg)" }}>Cómo funciona</h2>
-              <p className="form-legend" style={{ marginBottom: 0 }}>
-                Las contraseñas se guardan cifradas con PBKDF2-HMAC-SHA256 y 200 000 iteraciones;
-                el sistema nunca las almacena ni las muestra en claro. La reposición la hace el
-                administrador en persona, sin correo electrónico: así el acceso no depende de un
-                servicio externo ni de que el usuario tenga cuenta de correo institucional.
-              </p>
-            </article>
           </div>
         )}
 

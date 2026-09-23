@@ -304,12 +304,11 @@ metricas = {
     "n_val": int(len(y_val)),
     "train": _metricas_macro(y_train, y_pred_train),
     "val":   _metricas_macro(y_val, y_pred_val),
-    "cv": {
-        "accuracy":     round(float(np.mean(accs)), 4),
-        "accuracy_std": round(float(np.std(accs)), 4),
-        "recall_con_tdah": round(float(np.mean(rec_por_clase[2])), 4),
-    },
 }
+# La validacion cruzada NO se guarda en metricas.json. Es una comprobacion
+# interna de robustez que se imprime en consola: el modelo no se selecciona ni
+# se ajusta con ella, asi que publicarla junto a las metricas del modelo
+# entregado sugeriria una metodologia que no es la que se siguio.
 metricas_path = os.path.join(BASE, "backend_fastapi", "alumnos", "ml", "metricas.json")
 with open(metricas_path, "w", encoding="utf-8") as f:
     json.dump(metricas, f, indent=2, ensure_ascii=False)

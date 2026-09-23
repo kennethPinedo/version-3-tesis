@@ -5,7 +5,7 @@
  * puede navegar y qué acciones puede ejecutar dentro de una vista.
  *
  * @typedef {"Administrador"|"Psicólogo"|"Docente"} Rol
- * @typedef {"dashboard"|"general"|"alumno"|"lista"|"encuesta"|"inasistencias"|"predicciones"|"notas"|"expediente"|"cuentas"} Vista
+ * @typedef {"dashboard"|"general"|"alumno"|"lista"|"encuesta"|"inasistencias"|"predicciones"|"notas"|"expediente"} Vista
  */
 
 /**
@@ -25,7 +25,6 @@ export const VISTAS = [
   "predicciones",
   "notas",
   "expediente",
-  "cuentas",
 ];
 
 /** @type {Record<Vista, {icon: string, label: string}>} */
@@ -39,7 +38,6 @@ export const NAV_LABELS = {
   predicciones:  { icon: "↗", label: "Historial de Predicciones" },
   notas:         { icon: "✎", label: "Subir Notas" },
   expediente:    { icon: "⊡", label: "Expediente Psicológico" },
-  cuentas:       { icon: "⚿", label: "Cuentas y accesos" },
 };
 
 /**

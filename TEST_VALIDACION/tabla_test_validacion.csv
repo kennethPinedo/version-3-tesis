@@ -24,3 +24,8 @@
 23;Alumno 23;0;0;0;Sospecha Baja;2.5;A;1;Bajo;0.4;Bajo;SI
 24;Alumno 24;1;1;0;Sospecha Baja;2.8;A;0;Bajo;0.4;Bajo;SI
 25;Alumno 25;0;0;0;Sospecha Baja;2.5;A;0;Bajo;0.2;Bajo;SI
+26;Alumno 26;10;11;10;Sospecha Alta;99.8;AD;1;Medio;46.5;Medio;SI
+27;Alumno 27;13;13;13;Sospecha Alta;99.8;B;3;Alto;79.2;Alto;SI
+28;Alumno 28;13;12;10;Sospecha Alta;99.8;A;2;Medio;49.2;Medio;SI
+29;Alumno 29;14;8;12;Sospecha Alta;98.2;B;4;Medio;58.9;Medio;SI
+30;Alumno 30;3;9;9;Sospecha Baja;12.6;A;2;Bajo;0.3;Bajo;SI

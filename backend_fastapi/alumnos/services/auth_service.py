@@ -120,47 +120,14 @@ def requerir_administrador(db: Session, authorization: Optional[str]) -> Usuario
 
 
 # ══ Recuperación ══════════════════════════════════════════════════════════
-def crear_solicitud(db: Session, usuario: Usuario) -> SolicitudRecuperacion:
-    """Registra la petición. Si ya había una pendiente, la reutiliza para que
-    el usuario no genere un código distinto en cada intento."""
-    previa = (
-        db.query(SolicitudRecuperacion)
-        .filter(
-            SolicitudRecuperacion.usuario_id == usuario.id,
-            SolicitudRecuperacion.estado == "pendiente",
-            SolicitudRecuperacion.expira > datetime.utcnow(),
-        )
-        .first()
-    )
-    if previa:
-        return previa
-
-    codigo = f"REC-{usuario.usuario[:3].upper()}-{secrets.token_hex(3).upper()}"
-    solicitud = SolicitudRecuperacion(
-        usuario_id=usuario.id,
-        codigo=codigo,
-        expira=datetime.utcnow() + DURACION_SOLICITUD,
-    )
-    db.add(solicitud)
-    db.commit()
-    db.refresh(solicitud)
-    return solicitud
-
-
-def generar_password_temporal() -> str:
-    """Contraseña legible de un solo uso: letras sin ambigüedad más dígitos."""
-    letras = "ABCDEFGHJKLMNPQRSTUVWXYZ"   # sin I ni O, que se confunden
-    digitos = "23456789"                   # sin 0 ni 1
-    cuerpo = "".join(secrets.choice(letras) for _ in range(4))
-    cola = "".join(secrets.choice(digitos) for _ in range(4))
-    return f"{cuerpo}{cola}"
 
 
 def sembrar_usuarios_iniciales(db: Session) -> int:
     """Crea las tres cuentas institucionales la primera vez.
 
-    Conserva las credenciales que ya usaba el equipo para no romper el acceso,
-    pero marcadas para cambio obligatorio en el primer ingreso.
+    Son las credenciales de siempre y se entra con ellas directamente: no hay
+    cambio obligatorio. La contrasena se guarda cifrada (PBKDF2), pero el flujo
+    de acceso es el sencillo que el equipo ya conocia.
     """
     iniciales = [
         ("admin", "Administrador del sistema", "Administrador", "admin123"),
@@ -173,7 +140,7 @@ def sembrar_usuarios_iniciales(db: Session) -> int:
             continue
         db.add(Usuario(
             usuario=usuario, nombre=nombre, rol=rol,
-            password_hash=hashear(clave), activo=1, debe_cambiar=1,
+            password_hash=hashear(clave), activo=1, debe_cambiar=0,
         ))
         creados += 1
     if creados:

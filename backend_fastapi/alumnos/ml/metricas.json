@@ -15,10 +15,5 @@
     "recall_macro": 0.7132,
     "f1_macro": 0.7116,
     "especificidad_macro": 0.8905
-  },
-  "cv": {
-    "accuracy": 0.834,
-    "accuracy_std": 0.032,
-    "recall_con_tdah": 0.902
   }
 }
