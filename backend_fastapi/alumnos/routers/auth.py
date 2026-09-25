@@ -25,10 +25,17 @@ def sesion_requerida(
     return auth.requerir_usuario(db, authorization)
 
 
+# Mensaje único de acceso fallido. Se define aquí para que no pueda
+# divergir entre los distintos puntos que lo devuelven.
+CREDENCIALES_INVALIDAS = "Credenciales inválidas"
+
+
 # ══ Esquemas ══════════════════════════════════════════════════════════════
 class LoginIn(BaseModel):
-    usuario: str = Field(min_length=1, max_length=50)
-    password: str = Field(min_length=1, max_length=128)
+    # Sin min_length: un campo vacío no debe producir el error en inglés de
+    # Pydantic, sino el mismo «Credenciales inválidas» que el resto de fallos.
+    usuario: str = Field(default="", max_length=50)
+    password: str = Field(default="", max_length=128)
 
 
 class CambioPasswordIn(BaseModel):
@@ -50,12 +57,17 @@ def _usuario_dict(u: Usuario) -> dict:
 # ══ Ingreso ═══════════════════════════════════════════════════════════════
 @router.post("/auth/login")
 def login(data: LoginIn, db: Session = Depends(get_db)):
-    usuario = db.query(Usuario).filter(Usuario.usuario == data.usuario.strip().lower()).first()
+    nombre = data.usuario.strip().lower()
 
-    # Un único mensaje para usuario inexistente y contraseña incorrecta: revelar
-    # cuál de los dos falló permitiría enumerar las cuentas del sistema.
+    # Un único mensaje para todos los fallos —campo vacío, usuario inexistente
+    # o contraseña incorrecta—: distinguirlos permitiría averiguar qué cuentas
+    # existen en el sistema probando nombres uno a uno.
+    if not nombre or not data.password:
+        raise HTTPException(status_code=401, detail=CREDENCIALES_INVALIDAS)
+
+    usuario = db.query(Usuario).filter(Usuario.usuario == nombre).first()
     if not usuario or not auth.verificar(data.password, usuario.password_hash):
-        raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos.")
+        raise HTTPException(status_code=401, detail=CREDENCIALES_INVALIDAS)
     if not usuario.activo:
         raise HTTPException(status_code=403, detail="Esta cuenta está desactivada. Consulta con el administrador.")
 

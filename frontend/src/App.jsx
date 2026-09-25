@@ -760,11 +760,11 @@ export default function App() {
         nombre: r.usuario.nombre,
       });
       setActiveView(vistaInicial(r.usuario.rol));
-      notify(r.usuario.debe_cambiar
-        ? "Debes definir una contraseña propia antes de continuar."
-        : `Sesión iniciada como ${r.usuario.rol}.`);
+      notify(`Sesión iniciada como ${r.usuario.rol}.`);
     } catch (err) {
-      notify(err.message || "No se pudo iniciar sesión.", true);
+      // El servidor ya responde «Credenciales inválidas»; el texto de reserva
+      // cubre el caso de que no haya respuesta (servidor caído, sin red).
+      notify(err.message || "No se pudo conectar con el servidor.", true);
     } finally {
       setAutenticando(false);
     }
