@@ -63,9 +63,12 @@ export default function InasistenciasView({ alumnos, onGuardado, notify, confirm
         "PUT",
         { inasistencias: valor }
       );
+      // Solo se informa cuando la predicción SÍ se recalculó. Que falte la
+      // encuesta EDAH no es un error ni algo que el docente deba resolver
+      // desde esta pantalla, así que no se le menciona.
       const extra = res.prediccion_actualizada
         ? " La predicción del estudiante se recalculó con el nuevo valor."
-        : " (Aún no hay encuesta EDAH: la predicción se generará cuando se aplique.)";
+        : "";
       setFeedback({ msg: (res.mensaje ?? "Inasistencias guardadas.") + extra, error: false });
       notify?.(`Inasistencias actualizadas: ${valor} día(s).`);
       await onGuardado?.();
