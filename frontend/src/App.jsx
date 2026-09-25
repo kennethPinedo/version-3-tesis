@@ -105,8 +105,9 @@ const TIPOS_DOCUMENTO = {
   PASAPORTE: { etiqueta: "Pasaporte",            longitud: 9, patron: /^[A-Z0-9]{9}$/,  ayuda: "9 caracteres: letras mayúsculas y dígitos." },
 };
 
-// Primaria llega a 6°, secundaria a 5°.
-const NIVELES = { Primaria: 6, Secundaria: 5 };
+// El colegio solo matricula en el tramo de transición entre primaria y
+// secundaria, que es donde se aplica el instrumento.
+const NIVELES = { Primaria: [6], Secundaria: [1] };
 
 // Mismo enmascarado que aplica el backend, para que el diálogo de confirmación
 // muestre el documento sin exhibirlo entero.
@@ -318,7 +319,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
               <span class="rec-title">${r.icono} ${esc(r.titulo)}</span>
               <span class="tag tag-${r.prioridad === "critica" ? "alta" : r.prioridad}">${esc(r.prioridad_label)}</span>
             </div>
-            <div class="rec-meta">Regla: ${esc(r.regla)} · Responsable: ${esc(r.responsable)}</div>
+            <div class="rec-meta">Responsable: ${esc(r.responsable)}</div>
             <ul class="rec-acciones">${(r.acciones ?? []).map((a) => `<li>${esc(a)}</li>`).join("")}</ul>
           </li>`).join("")}
       </ul>
@@ -629,24 +630,6 @@ export default function App() {
   const [dashFiltros, setDashFiltros] = useState({ ...DASH_FILTROS_VACIOS });
   const [dashBorrador, setDashBorrador] = useState({ ...DASH_FILTROS_VACIOS });
 
-  // SHAP del alumno mostrado en el panel: la explicación deja de estar
-  // escondida detrás de un botón en otra pantalla (SUS, ítem 5).
-  const [dashShap, setDashShap] = useState(null);
-  const [dashShapCargando, setDashShapCargando] = useState(false);
-
-  useEffect(() => {
-    const pid = dashData?.id;
-    if (!pid) { setDashShap(null); return; }
-    let cancelado = false;
-    setDashShapCargando(true);
-    Promise.all([
-      req(`/predicciones/${pid}/shap/`).catch(() => null),
-      req(`/predicciones/${pid}/shap-riesgo/`).catch(() => null),
-    ])
-      .then(([tdah, riesgo]) => { if (!cancelado) setDashShap({ tdah, riesgo }); })
-      .finally(() => { if (!cancelado) setDashShapCargando(false); });
-    return () => { cancelado = true; };
-  }, [dashData?.id]);
 
   async function loadDashData(alumnoId) {
     if (!alumnoId) { setDashData(null); setDashHistorial([]); return; }
@@ -1195,10 +1178,6 @@ export default function App() {
           const tieneDistribucion = pr && pr.alta != null;
           const pct = (v) => Math.round((v ?? 0) * 100);
 
-          // Evolución: el sistema guarda todas las predicciones y hasta ahora
-          // no se mostraba ninguna. Orden cronológico ascendente.
-          const serie = [...(dashHistorial ?? [])].reverse()
-            .map((p) => ({ v: Math.round((p.probabilidad ?? 0) * 100), f: p.fecha_prediccion }));
 
           const Etiqueta = ({ children }) => (
             <span style={{ fontSize: "var(--t-xs)", fontWeight: 700, letterSpacing: ".06em",
@@ -1458,84 +1437,9 @@ export default function App() {
                       </p>
                     </div>
 
-                    {/* ── El porqué, en la misma pantalla ── */}
-                    <div className="chart-panel">
-                      <h3 className="chart-title">Por qué el modelo estimó esto</h3>
-                      {dashShapCargando && (
-                        <p className="cargando" role="status" aria-live="polite">
-                          <span className="spinner" aria-hidden="true" />Calculando la explicación…
-                        </p>
-                      )}
-                      {!dashShapCargando && dashShap?.tdah?.features?.length > 0 && (
-                        <>
-                          <ShapFactores features={dashShap.tdah.features} />
-                          {dashShap.riesgo?.features?.length > 0 && (
-                            <div style={{ marginTop: "var(--e4)", paddingTop: "var(--e3)",
-                                          borderTop: "1px dashed var(--linea-fuerte)" }}>
-                              <Etiqueta>Riesgo académico</Etiqueta>
-                              <ShapFactores features={dashShap.riesgo.features} />
-                            </div>
-                          )}
-                          <p className="form-legend" style={{ marginTop: "var(--e3)", marginBottom: 0 }}>
-                            Cada barra indica cuánto empujó ese factor el resultado, en rojo hacia arriba y en verde hacia abajo.
-                          </p>
-                        </>
-                      )}
-                      {!dashShapCargando && !dashShap?.tdah?.features?.length && (
-                        <p className="form-legend" style={{ margin: 0 }}>No se pudo obtener la explicación.</p>
-                      )}
-                    </div>
                   </div>
 
                   <div className="bottom-row">
-                    {/* ── Evolución: dato que ya se guardaba y nunca se mostraba ── */}
-                    <div className="chart-panel">
-                      <h3 className="chart-title">Cómo ha evolucionado su riesgo</h3>
-                      {serie.length < 2 ? (
-                        <p className="form-legend" style={{ margin: 0 }}>
-                          Solo hay una evaluación. La línea aparecerá cuando se genere una segunda,
-                          y permitirá ver si el estudiante mejora o empeora.
-                        </p>
-                      ) : (
-                        <>
-                          <svg viewBox="0 0 320 110" width="100%" height="120" role="img"
-                               aria-label={`Evolución del índice de riesgo en ${serie.length} evaluaciones, de ${serie[0].v} a ${serie[serie.length - 1].v} sobre 100`}>
-                            <line x1="0" y1="100" x2="320" y2="100" stroke="var(--linea)" strokeWidth="1" />
-                            <line x1="0" y1="10" x2="320" y2="10" stroke="var(--linea)" strokeWidth="1" strokeDasharray="3 3" />
-                            {mediaRiesgo != null && (
-                              <>
-                                <line x1="0" y1={100 - (mediaRiesgo / 100) * 90} x2="320" y2={100 - (mediaRiesgo / 100) * 90}
-                                      stroke="var(--tinta-suave)" strokeWidth="1.5" strokeDasharray="5 4" />
-                                <text x="4" y={100 - (mediaRiesgo / 100) * 90 - 5} fontSize="9" fill="var(--tinta-suave)">
-                                  media institucional {mediaRiesgo}
-                                </text>
-                              </>
-                            )}
-                            <polyline
-                              fill="none" stroke="var(--marca)" strokeWidth="2.5"
-                              strokeLinejoin="round" strokeLinecap="round"
-                              points={serie.map((p, i) =>
-                                `${(i / Math.max(1, serie.length - 1)) * 310 + 5},${100 - (p.v / 100) * 90}`).join(" ")}
-                            />
-                            {serie.map((p, i) => (
-                              <circle key={i}
-                                cx={(i / Math.max(1, serie.length - 1)) * 310 + 5}
-                                cy={100 - (p.v / 100) * 90}
-                                r={i === serie.length - 1 ? 4.5 : 3}
-                                fill={i === serie.length - 1 ? "var(--marca-oscura)" : "var(--marca)"} />
-                            ))}
-                          </svg>
-                          <div style={{ display: "flex", justifyContent: "space-between",
-                                        fontSize: "var(--t-sm)", color: "var(--tinta-suave)" }}>
-                            <span>Primera: {serie[0].v} de 100</span>
-                            <span style={{ fontWeight: 700, color: "var(--tinta)" }}>
-                              Actual: {serie[serie.length - 1].v} de 100
-                            </span>
-                          </div>
-                        </>
-                      )}
-                    </div>
-
                     <div className="chart-panel">
                       <h3 className="chart-title">Qué se recomienda hacer</h3>
                       <RecomendacionesPanel predId={dashData.id} />
@@ -1702,14 +1606,15 @@ export default function App() {
                 </div>
                 <div className="field-group">
                   <label htmlFor="alumno-edad">Edad</label>
-                  <input id="alumno-edad" type="number" min={5} max={30} value={alumnoForm.edad} onChange={(e) => setAlumnoForm({ ...alumnoForm, edad: e.target.value })} required />
+                  <input id="alumno-edad" type="number" min={11} max={12} value={alumnoForm.edad} onChange={(e) => setAlumnoForm({ ...alumnoForm, edad: e.target.value })} required />
                 </div>
                 <div className="field-group">
                   <label htmlFor="alumno-nivel">Nivel</label>
                   <select
                     id="alumno-nivel"
                     value={alumnoForm.nivel}
-                    onChange={(e) => setAlumnoForm({ ...alumnoForm, nivel: e.target.value, grado: "" })}
+                    onChange={(e) => setAlumnoForm({ ...alumnoForm, nivel: e.target.value,
+                                 grado: String((NIVELES[e.target.value] ?? [])[0] ?? "") })}
                     required
                   >
                     <option value="Primaria">Primaria</option>
@@ -1726,7 +1631,7 @@ export default function App() {
                     required
                   >
                     <option value="">Selecciona</option>
-                    {Array.from({ length: NIVELES[alumnoForm.nivel] ?? 5 }, (_, i) => i + 1).map((g) => (
+                    {(NIVELES[alumnoForm.nivel] ?? []).map((g) => (
                       <option key={g} value={g}>{g}° de {alumnoForm.nivel}</option>
                     ))}
                   </select>
@@ -2025,7 +1930,8 @@ export default function App() {
                         <select
                           id="edit-nivel"
                           value={listaEditForm.nivel ?? "Secundaria"}
-                          onChange={(e) => setListaEditForm({ ...listaEditForm, nivel: e.target.value, grado: 1 })}
+                          onChange={(e) => setListaEditForm({ ...listaEditForm, nivel: e.target.value,
+                                    grado: (NIVELES[e.target.value] ?? [])[0] ?? 1 })}
                         >
                           <option value="Primaria">Primaria</option>
                           <option value="Secundaria">Secundaria</option>
@@ -2039,7 +1945,7 @@ export default function App() {
                           value={listaEditForm.grado ?? 1}
                           onChange={(e) => setListaEditForm({ ...listaEditForm, grado: e.target.value })}
                         >
-                          {Array.from({ length: NIVELES[listaEditForm.nivel ?? "Secundaria"] ?? 5 }, (_, i) => i + 1).map((g) => (
+                          {(NIVELES[listaEditForm.nivel ?? "Secundaria"] ?? []).map((g) => (
                             <option key={g} value={g}>{g}° de {listaEditForm.nivel ?? "Secundaria"}</option>
                           ))}
                         </select>

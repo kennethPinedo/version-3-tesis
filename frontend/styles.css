@@ -378,7 +378,8 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
 .pred-interpretacion__texto  { margin: 0; color: var(--tinta-media); font-size: var(--t-md); line-height: 1.65; }
 
 /* ══ Panel principal ══════════════════════════════════════════════════ */
-.dashboard { max-width: 1140px; }
+/* Sin tope de ancho: la pantalla se aprovecha entera. */
+.dashboard { max-width: none; }
 
 .dash-selector-panel { margin-bottom: var(--e5); display: flex; align-items: flex-end; gap: var(--e4); flex-wrap: wrap; }
 .dash-selector-label { margin: 0 0 var(--e1); font-weight: 700; color: var(--marca-oscura); white-space: nowrap; }
@@ -454,7 +455,7 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
 .ver-todas-btn:hover { background: var(--marca-suave); border-color: var(--marca); }
 
 /* ══ Encuesta ═════════════════════════════════════════════════════════ */
-.encuesta-layout { max-width: 980px; }
+.encuesta-layout { max-width: none; }
 .encuesta-form { gap: var(--e4); align-content: start; }
 .panel-encuesta { padding: var(--e6); }
 .encuesta-bloque { margin-top: var(--e1); }
@@ -464,7 +465,7 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
 .encuesta-grid label { line-height: 1.4; min-height: 2.8em; }
 
 /* ══ Notas ════════════════════════════════════════════════════════════ */
-.notas-layout { max-width: 760px; }
+.notas-layout { max-width: none; }
 .panel-notas { padding: var(--e5); }
 .toggle-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--e2); margin-bottom: var(--e4); }
 .toggle-btn {

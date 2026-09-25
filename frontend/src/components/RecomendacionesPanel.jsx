@@ -79,7 +79,7 @@ export default function RecomendacionesPanel({ predId, compacto = false }) {
             <span className="rec-text" style={{ flex: 1, minWidth: 220 }}>
               <b>{r.titulo}</b>
               <span style={{ display: "block", fontSize: "0.74rem", color: "#94a3b8", margin: "2px 0 0" }}>
-                Regla: {r.regla} · Responsable: {r.responsable}
+                Responsable: {r.responsable}
               </span>
               {!compacto && (
                 <ul style={{ margin: "8px 0 0", paddingLeft: 18, color: "#475569", fontSize: "0.84rem", lineHeight: 1.6 }}>

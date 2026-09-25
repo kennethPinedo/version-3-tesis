@@ -17,7 +17,9 @@ router = APIRouter()
 # Tope defensivo: un año escolar peruano tiene ~190 días lectivos.
 MAX_INASISTENCIAS = 365
 
-NIVELES = {"Primaria": 6, "Secundaria": 5}   # nivel -> grado máximo
+# El colegio solo matricula en el tramo de transición entre primaria y
+# secundaria, que es donde se aplica el instrumento EDAH.
+NIVELES = {"Primaria": [6], "Secundaria": [1]}   # nivel -> grados admitidos
 
 # Nombres: letras (con tildes y ñ), dígitos, espacios, apóstrofo y guion.
 # Lo que se persigue son los caracteres especiales —etiquetas HTML, comillas,
@@ -41,7 +43,9 @@ class AlumnoCreate(BaseModel):
     """
     nombre: str = Field(min_length=2, max_length=100)
     apellido: str = Field(min_length=2, max_length=100)
-    edad: int = Field(ge=3, le=30)
+    # El instrumento se aplica en el tramo 6.o de primaria - 1.o de secundaria,
+    # cuyas edades tipicas son 11 y 12 anios.
+    edad: int = Field(ge=11, le=12)
     nivel: str = Field(default="Secundaria")
     grado: int = Field(ge=1, le=6, description="Número de grado dentro del nivel")
     anio_cursada: int = Field(default=2024, ge=2000, le=2100)
@@ -93,9 +97,10 @@ class AlumnoCreate(BaseModel):
 
     def validar_cruzado(self) -> Optional[str]:
         """Comprobaciones que dependen de más de un campo."""
-        tope = NIVELES[self.nivel]
-        if self.grado > tope:
-            return f"{self.nivel} llega hasta {tope}° grado."
+        admitidos = NIVELES[self.nivel]
+        if self.grado not in admitidos:
+            grados = " o ".join(f"{g}°" for g in admitidos)
+            return f"En {self.nivel} solo se admite {grados} grado."
         _, motivo = cripto.validar(self.tipo_documento, self.numero_documento)
         return motivo
 
