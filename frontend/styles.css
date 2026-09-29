@@ -22,12 +22,25 @@
   --marca-suave:  #2a2440;   /* relleno tenue del elemento activo */
   --marca-borde:  #453a6b;
 
-  --alto:         #f87171;   /* 6.0:1 — riesgo alto / probabilidad alta */
+  /* Escala de riesgo. Contrastes MEDIDOS sobre --superficie, no estimados.
+     El nivel bajo era verde (#34d399) y se cambió a cian: con deuteranopia
+     —la daltonía más común, ~6% de los varones— el verde y el ámbar se
+     volvían el mismo color (separación RGB 52, hace falta >100). Con cian
+     sube a 100. Rojo y ámbar se conservan: ya se distinguían.
+     Aun así el color NUNCA es el único indicador: cada nivel lleva icono y
+     texto, porque WCAG 1.4.1 no admite codificar solo por color. */
+  --alto:         #f87171;   /* 5.6:1 — riesgo alto */
   --alto-suave:   #33222a;
-  --medio:        #fbbf24;   /* 9.8:1 — riesgo medio */
+  --medio:        #fbbf24;   /* 9.2:1 — riesgo medio */
   --medio-suave:  #332a1a;
-  --bajo:         #34d399;   /* 8.7:1 — riesgo bajo */
-  --bajo-suave:   #16302a;
+  --bajo:         #22d3ee;   /* 8.5:1 — riesgo bajo */
+  --bajo-suave:   #142c33;
+
+  /* Azul informativo: ni marca ni riesgo. Existe porque App.jsx tenía azules
+     incrustados a mano (#2563eb, #0093c4) que sobre fondo oscuro daban 2.6:1
+     y quedaban ilegibles. */
+  --dato:         #60a5fa;   /* 6.0:1 sobre superficie */
+  --dato-suave:   #1a2740;
 
   /* Neutros fríos, escalonados para que las superficies se distingan sin
      depender de sombras, que apenas se ven sobre fondo oscuro. */
@@ -73,7 +86,8 @@
   --serie-3: #60a5fa;
   --serie-4: #fbbf24;
   --serie-5: #f87171;
-  --serie-6: #22d3ee;
+  --serie-6: #f472b6;   /* era cian, que ahora es el «riesgo bajo»: un mismo
+                           color no puede significar dos cosas en la interfaz */
 
   color-scheme: dark;
 }
@@ -415,7 +429,10 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   letter-spacing: .06em; text-transform: uppercase;
 }
 .kpi-value { font-size: var(--t-xl); font-weight: 800; line-height: 1.2; }
-.kpi-sub { font-size: var(--t-sm); color: var(--tinta-suave); }
+/* El denominador acompaña al porcentaje: «93,3%» solo se lee como más
+   sólido de lo que es si no se ve que son 28 de 30. */
+.kpi-sub { display: block; margin-top: 2px; font-size: var(--t-sm);
+           color: var(--tinta-suave); font-variant-numeric: tabular-nums; }
 .kpi-arrow { margin-left: var(--e1); font-style: normal; font-weight: 700; }
 
 .charts-row, .bottom-row {
@@ -561,3 +578,294 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   border: 1px solid var(--linea-fuerte);
 }
 .confirm-cancelar:hover:not(:disabled) { background: var(--linea); color: var(--tinta); }
+
+/* ── Chips de conteo del Dashboard General ────────────────────────────────
+   Antes eran tarjetas blancas con borde gris claro: restos de un tema claro
+   que sobre el fondo oscuro aparecían como parches luminosos. */
+.chip-conteo {
+  flex: 1;
+  min-width: 90px;
+  padding: var(--e3);
+  border-radius: var(--radio);
+  text-align: center;
+  background: var(--superficie-2);
+  border: 1px solid var(--linea);
+}
+.chip-conteo-v {
+  font-size: 1.8rem;
+  font-weight: 800;
+  line-height: 1.1;
+  /* Las cifras se comparan en columna: con ancho tabular no bailan. */
+  font-variant-numeric: tabular-nums;
+}
+.chip-conteo-v span { font-size: 0.62em; vertical-align: 0.12em; }
+.chip-conteo-l { font-size: var(--t-sm); color: var(--tinta-suave); margin-top: 2px; }
+
+/* ── Enlace de texto dentro de las pantallas de acceso ────────────────────
+   Es un <button> y no un <a>: no navega a ninguna parte, cambia el paso en
+   el que estás. Un enlace que no lleva a ningún sitio confunde a los lectores
+   de pantalla, que lo anuncian como destino. */
+.auth-enlace { margin: var(--e3) 0 0; text-align: center; }
+button.enlace {
+  background: none;
+  border: none;
+  padding: var(--e1) var(--e2);
+  width: auto;
+  min-height: auto;
+  color: var(--marca-fuerte);
+  font-size: var(--t-md);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+button.enlace:hover:not(:disabled) { color: var(--marca-oscura); background: none; }
+button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-offset: 2px; border-radius: var(--radio-sm); }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Métricas del Modelo y Accesos
+   Comparten estructura: bloques apilados con título, subtítulo y contenido.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.mm-bloque {
+  background: var(--superficie);
+  border: 1px solid var(--linea);
+  border-radius: var(--radio-lg);
+  padding: var(--e6);
+  margin-bottom: var(--e5);
+}
+.mm-bloque > h2 {
+  margin: 0 0 var(--e1);
+  font-size: var(--t-xl);
+  color: var(--marca-oscura);
+  display: flex;
+  align-items: center;
+  gap: var(--e2);
+}
+.mm-sub { margin: 0 0 var(--e5); color: var(--tinta-media); font-size: var(--t-md); max-width: 72ch; }
+.mm-h3 { margin: var(--e6) 0 var(--e3); font-size: var(--t-lg); color: var(--tinta); }
+.mm-pie {
+  margin: var(--e5) 0 0;
+  padding-top: var(--e3);
+  border-top: 1px solid var(--linea);
+  color: var(--tinta-suave);
+  font-size: var(--t-sm);
+  max-width: 78ch;
+}
+
+/* El aviso de tamizaje encabeza la vista: es la advertencia que evita que
+   alguien lea una probabilidad como si fuera un diagnóstico. */
+.mm-aviso {
+  background: var(--medio-suave);
+  border-left: 4px solid var(--medio);
+  border-radius: var(--radio-sm);
+  padding: var(--e4) var(--e5);
+  margin: 0 0 var(--e5);
+  color: var(--tinta);
+  font-size: var(--t-md);
+  max-width: 88ch;
+}
+
+/* ── Tarjetas de métrica ──────────────────────────────────────────────── */
+.mm-metricas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--e4);
+}
+.mm-metrica {
+  background: var(--superficie-2);
+  border: 1px solid var(--linea);
+  border-radius: var(--radio);
+  padding: var(--e4);
+}
+.mm-metrica-cab { display: flex; align-items: baseline; justify-content: space-between; gap: var(--e3); }
+.mm-metrica-nombre { font-weight: 650; color: var(--tinta); }
+.mm-metrica-valor {
+  font-size: var(--t-2xl);
+  font-weight: 800;
+  color: var(--marca-oscura);
+  font-variant-numeric: tabular-nums;
+}
+.mm-metrica-que { margin: var(--e3) 0 0; font-size: var(--t-sm); color: var(--tinta-media); }
+.mm-metrica-ojo { margin: var(--e2) 0 0; font-size: var(--t-sm); color: var(--tinta-suave); }
+.mm-metrica-ojo strong { color: var(--medio); }
+
+/* ── Barras de influencia ─────────────────────────────────────────────── */
+.mm-lista { list-style: none; margin: 0; padding: 0; }
+.mm-lista li + li { margin-top: var(--e4); }
+.mm-fila { display: flex; justify-content: space-between; align-items: baseline; gap: var(--e4); margin-bottom: var(--e2); }
+.mm-etq { color: var(--tinta); font-size: var(--t-md); }
+.mm-pct { color: var(--tinta-media); font-size: var(--t-md); font-variant-numeric: tabular-nums; font-weight: 650; }
+.mm-barra { height: 9px; background: var(--superficie-2); border-radius: 99px; overflow: hidden; }
+.mm-barra-fill { display: block; height: 100%; border-radius: 99px; }
+
+/* ── Los dos tipos de error ───────────────────────────────────────────── */
+.mm-errores { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--e4); }
+.mm-error { border-radius: var(--radio); padding: var(--e5); border: 1px solid var(--linea); }
+.mm-error h3 { margin: 0 0 var(--e2); font-size: var(--t-lg); }
+.mm-error p { margin: 0 0 var(--e2); font-size: var(--t-md); color: var(--tinta-media); }
+.mm-consecuencia { color: var(--tinta-suave) !important; font-size: var(--t-sm) !important; }
+/* El falso negativo va en rojo porque es el error que deja a un alumno sin
+   apoyo; el falso positivo, en ámbar, porque se corrige en la entrevista. */
+.mm-error--fn { background: var(--alto-suave); border-color: var(--alto); }
+.mm-error--fn h3 { color: var(--alto); }
+.mm-error--fp { background: var(--medio-suave); border-color: var(--medio); }
+.mm-error--fp h3 { color: var(--medio); }
+
+/* ── Accesos ──────────────────────────────────────────────────────────── */
+.ac-contador {
+  background: var(--alto);
+  color: #16181c;
+  border-radius: 99px;
+  padding: 1px var(--e2);
+  font-size: var(--t-sm);
+  font-weight: 800;
+  min-width: 22px;
+  text-align: center;
+}
+.ac-estado { padding: 2px var(--e2); border-radius: 99px; font-size: var(--t-xs); font-weight: 650; white-space: nowrap; }
+.ac-estado--pend { background: var(--medio-suave); color: var(--medio); }
+.ac-estado--ok   { background: var(--bajo-suave);  color: var(--bajo); }
+.ac-estado--cad  { background: var(--superficie-2); color: var(--tinta-suave); }
+
+.ac-form { background: var(--superficie-2); border-radius: var(--radio); padding: var(--e4); max-width: 46ch; }
+.ac-form label { display: block; margin-bottom: var(--e2); font-weight: 650; }
+.ac-form button { margin-top: var(--e3); width: auto; }
+
+.ac-matriz-wrap { overflow-x: auto; }
+.ac-matriz td, .ac-matriz th { text-align: left; }
+.ac-celda { text-align: center !important; }
+/* El símbolo lleva aria-label: un ✓ suelto no dice nada a un lector de
+   pantalla, y el color tampoco. */
+.ac-si { color: var(--bajo); font-weight: 800; }
+.ac-no { color: var(--tinta-suave); }
+
+/* ── Cifra titular de la validación real ──────────────────────────────── */
+.mm-titular {
+  display: flex;
+  align-items: baseline;
+  gap: var(--e4);
+  flex-wrap: wrap;
+  background: var(--marca-suave);
+  border: 1px solid var(--marca-borde);
+  border-radius: var(--radio);
+  padding: var(--e4) var(--e5);
+  margin-bottom: var(--e5);
+}
+.mm-titular-v {
+  font-size: 2.6rem;
+  font-weight: 800;
+  color: var(--marca-oscura);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.mm-titular-l { color: var(--tinta-media); font-size: var(--t-md); }
+
+/* El bloque secundario se distingue por su superficie, no por un borde más
+   fino: en oscuro un borde tenue no se ve. */
+.mm-bloque--sec { background: var(--fondo); }
+
+/* ── Matriz de confusión ──────────────────────────────────────────────── */
+.mm-matriz-wrap { overflow-x: auto; }
+.mm-matriz { border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.mm-matriz caption {
+  caption-side: top;
+  text-align: left;
+  color: var(--tinta-suave);
+  font-size: var(--t-sm);
+  padding-bottom: var(--e3);
+}
+.mm-matriz th, .mm-matriz td {
+  border: 1px solid var(--linea);
+  padding: var(--e3) var(--e4);
+  text-align: center;
+  min-width: 96px;
+}
+.mm-matriz thead th, .mm-matriz tbody th {
+  background: var(--superficie-2);
+  color: var(--tinta-media);
+  font-size: var(--t-sm);
+  font-weight: 650;
+}
+.mm-matriz tbody th { text-align: left; white-space: nowrap; }
+.mm-matriz td { font-size: var(--t-lg); color: var(--tinta); }
+/* Aciertos y errores se distinguen por fondo Y por peso: el color solo no
+   basta (WCAG 1.4.1), y aquí la cifra es lo que se lee. */
+.mm-acierto { background: var(--bajo-suave); color: var(--bajo) !important; font-weight: 800; }
+.mm-error-celda { background: var(--alto-suave); color: var(--alto) !important; font-weight: 700; }
+
+.mm-porclase { margin-top: var(--e3); }
+
+/* Tabla de procedencia de los datos: tres columnas de texto, no de cifras,
+   así que se deja respirar y se limita el ancho de lectura. */
+.mm-origen td { vertical-align: top; line-height: 1.55; }
+.mm-origen td:first-child { white-space: nowrap; }
+.mm-origen td:not(:first-child) { max-width: 40ch; }
+
+/* ── Historial de inasistencias ───────────────────────────────────────── */
+.inasist-hist {
+  background: var(--superficie-2);
+  border: 1px solid var(--linea);
+  border-radius: var(--radio);
+  padding: var(--e4);
+  margin-top: var(--e3);
+}
+.inasist-hist-t { margin: 0 0 var(--e3); font-size: var(--t-md); color: var(--tinta-media); }
+.inasist-hist table { font-variant-numeric: tabular-nums; }
+/* Un salto de 15 dias o mas en una sola anotacion merece una mirada: puede ser
+   un mes de ausencias real o un cero de mas al teclear. */
+.inasist-salto { color: var(--medio); font-weight: 700; }
+
+/* ── Cabecera de cada aplicación de la escala EDAH ────────────────────────
+   Un alumno puede tener varias: se conservan todas y hay que poder decir de
+   un vistazo quién respondió cada una y cuál alimenta las predicciones. */
+.enc-cab {
+  display: flex;
+  align-items: center;
+  gap: var(--e3);
+  flex-wrap: wrap;
+  margin-bottom: var(--e2);
+  color: var(--tinta-suave);
+  font-weight: 600;
+}
+.enc-informante { font-weight: 500; color: var(--tinta-media); font-size: var(--t-sm); }
+.enc-vigente {
+  background: var(--marca-suave);
+  color: var(--marca-oscura);
+  border: 1px solid var(--marca-borde);
+  border-radius: 99px;
+  padding: 2px var(--e3);
+  font-size: var(--t-xs);
+  font-weight: 700;
+}
+
+/* ── Control de Inasistencias por fecha ───────────────────────────────────── */
+.asist-tabla-wrap { overflow-x: auto; }
+/* El icono va delante del texto y no depende del color: con deuteranopia el
+   rojo y el cian se distinguen, pero el símbolo funciona sin verlos. */
+.asist-falta { color: var(--alto); font-weight: 650; white-space: nowrap; }
+.asist-ok    { color: var(--bajo); font-weight: 650; white-space: nowrap; }
+
+.asist-total {
+  margin-top: var(--e5);
+  border-top: 1px solid var(--linea);
+  padding-top: var(--e4);
+}
+.asist-total-fila {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--e4);
+  padding: var(--e2) 0;
+  color: var(--tinta-media);
+}
+.asist-total-fila strong { font-variant-numeric: tabular-nums; color: var(--tinta); }
+.asist-total-fila--nota { align-items: flex-start; }
+.asist-total-fila--nota .form-legend { margin: 2px 0 0; max-width: 54ch; }
+/* La suma se separa del desglose: es la cifra que alimenta el modelo. */
+.asist-total-fila--suma {
+  margin-top: var(--e2);
+  padding-top: var(--e3);
+  border-top: 1px solid var(--linea);
+  font-size: var(--t-lg);
+}
+.asist-total-fila--suma strong { color: var(--marca-oscura); font-weight: 800; }

@@ -18,24 +18,52 @@
  * @typedef {{tdah: FiltroTdah, riesgo: FiltroRiesgo}} FiltrosPrediccion
  */
 
-// Tonos claros: sobre fondo oscuro, los oscuros del tema claro se pierden.
+/*
+ * Se apunta a los tokens del CSS en lugar de repetir los hexadecimales: cuando
+ * «Bajo» pasó de verde a cian —porque con deuteranopia el verde y el ámbar se
+ * veían idénticos— estas constantes se quedaron con el verde viejo y la
+ * interfaz mostraba dos colores distintos para lo mismo. Con var() eso no
+ * puede repetirse: el color vive en un único sitio.
+ */
 export const RIESGO_COLORS = {
-  Alto: "#f87171",
-  Medio: "#fbbf24",
-  Moderado: "#fbbf24",
-  Bajo: "#34d399",
+  Alto: "var(--alto)",
+  Medio: "var(--medio)",
+  Moderado: "var(--medio)",
+  Bajo: "var(--bajo)",
 };
 
 export const PROB_COLORS = {
-  "Sospecha Alta": "#f87171",
-  "Sospecha Media": "#fbbf24",
-  "Sospecha Baja": "#34d399",
+  "Sospecha Alta": "var(--alto)",
+  "Sospecha Media": "var(--medio)",
+  "Sospecha Baja": "var(--bajo)",
   // Predicciones antiguas, sin la distribución completa del modelo.
-  "Resto de clases": "#434a54",
+  "Resto de clases": "var(--linea-fuerte)",
 };
 
 /** @type {FiltrosPrediccion} */
 export const FILTROS_INICIALES = { tdah: "Todos", riesgo: "Todos" };
+
+/*
+ * Opciones de los desplegables de filtro.
+ *
+ * Estaban escritas dos veces —en FiltrosPrediccion.jsx y en el buscador del
+ * dashboard— y ya habían empezado a divergir en las etiquetas. Aquí viven una
+ * sola vez, junto a la función que las aplica, para que añadir un nivel no
+ * exija acordarse de tocar dos archivos.
+ */
+export const OPCIONES_RIESGO = [
+  { value: "Todos", label: "Todos" },
+  { value: "Alto", label: "Alto" },
+  { value: "Medio", label: "Medio" },
+  { value: "Bajo", label: "Bajo" },
+];
+
+export const OPCIONES_TDAH = [
+  { value: "Todos", label: "Todas" },
+  { value: "Alta", label: "Alta" },
+  { value: "Media", label: "Media" },
+  { value: "Baja", label: "Baja" },
+];
 
 /**
  * Texto visible del indicador de TDAH: muestra "Probabilidad" en vez de

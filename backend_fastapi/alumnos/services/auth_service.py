@@ -122,6 +122,16 @@ def requerir_administrador(db: Session, authorization: Optional[str]) -> Usuario
 # ══ Recuperación ══════════════════════════════════════════════════════════
 
 
+# Las tres cuentas institucionales, en un unico sitio. La pantalla de acceso
+# las lee de aqui a traves de /auth/cuentas-demo en lugar de repetirlas, que es
+# como acabaron diciendo «psico123» cuando esa cuenta ya tenia otra clave.
+CUENTAS_INICIALES = [
+    ("admin", "Administrador del sistema", "Administrador", "admin123"),
+    ("psicologo", "Psicólogo institucional", "Psicólogo", "psico123"),
+    ("docente", "Docente de aula", "Docente", "docente123"),
+]
+
+
 def sembrar_usuarios_iniciales(db: Session) -> int:
     """Crea las tres cuentas institucionales la primera vez.
 
@@ -129,11 +139,7 @@ def sembrar_usuarios_iniciales(db: Session) -> int:
     cambio obligatorio. La contrasena se guarda cifrada (PBKDF2), pero el flujo
     de acceso es el sencillo que el equipo ya conocia.
     """
-    iniciales = [
-        ("admin", "Administrador del sistema", "Administrador", "admin123"),
-        ("psicologo", "Psicólogo institucional", "Psicólogo", "psico123"),
-        ("docente", "Docente de aula", "Docente", "docente123"),
-    ]
+    iniciales = CUENTAS_INICIALES
     creados = 0
     for usuario, nombre, rol, clave in iniciales:
         if db.query(Usuario).filter(Usuario.usuario == usuario).first():

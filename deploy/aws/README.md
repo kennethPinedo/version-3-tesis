@@ -6,6 +6,15 @@ la tesis. Está pensado para seguirse de arriba abajo, sin saltarse pasos.
 > **Antes de empezar: esto cuesta dinero.** Tu cuenta ya no tiene capa gratuita,
 > así que se factura desde la primera hora. Lee la sección de costes.
 
+El orden importa en dos puntos, y los dos suelen costar un despliegue repetido:
+
+- **Los datos antes del frontend** (fase 7 antes de la 9): si la base de RDS
+  está vacía, lo que ves en la interfaz no distingue un fallo de conexión de una
+  base sin alumnos.
+- **El HTTPS antes del frontend** (fase 8 antes de la 9): la URL de la API se
+  compila dentro del JavaScript. Si la compilas en `http://` y luego pones el
+  certificado, hay que compilar y subir otra vez.
+
 ---
 
 ## 1. Costes reales
@@ -98,8 +107,9 @@ actives las alertas de facturación **a mano y antes**:
 |---|---|
 | AWS CLI configurado | `aws sts get-caller-identity` |
 | Docker en tu máquina | `docker --version` |
-| Un par de claves SSH | Consola → EC2 → Key Pairs → Create |
+| Un par de claves SSH | Lo crea el script; no hay que hacer nada |
 | Tu IP pública | `curl -s https://checkip.amazonaws.com` |
+| Un subdominio para la API | Gratis en [duckdns.org](https://www.duckdns.org); se usa en la fase 8 |
 
 > **Usa un usuario IAM, no la cuenta raíz.** Si solo tienes la raíz, crea un
 > usuario con la política `AdministratorAccess` y configura la CLI con él.
@@ -118,6 +128,40 @@ Comprueba los requisitos, descubre la VPC y las subredes por su cuenta, crea el
 par de claves SSH si no existe, restringe el acceso a tu IP, genera la
 contraseña de la base, **te muestra lo que vas a pagar y pide confirmación**
 antes de crear nada. Si la pila ya existe, lo dice y no la duplica.
+
+### Si AWS no ha verificado tu cuenta para CloudFront
+
+En cuentas nuevas, AWS bloquea CloudFront hasta revisarlas a mano. El error solo
+aparece **al crear la distribución**, a los ocho minutos, y tumba la pila entera:
+
+```
+Your account must be verified before you can add new CloudFront resources.
+```
+
+El script lo detecta **antes** de empezar y, si está bloqueado, crea la pila sin
+el frontend estático. Servidor, base de datos y expedientes se crean con
+normalidad, y las fases 5 a 8 funcionan igual. Solo queda pendiente la 9.
+
+Para desbloquearlo: **Support → Create case → Account and billing** (gratis en el
+plan Basic), servicio `Account`, y pega el mensaje de error con tu ID de cuenta.
+Suelen tardar entre unas horas y 48 h.
+
+Cuando respondan:
+
+```bash
+bash deploy/aws/anadir-cloudfront.sh
+```
+
+Comprueba que la verificación esté concedida y **actualiza** la pila añadiendo
+solo los cuatro recursos que faltan. No recrea la instancia, ni la base, ni los
+expedientes. Si algo falla, CloudFormation revierte y lo que ya funcionaba sigue
+en pie.
+
+Para forzar una u otra opción a mano:
+
+```bash
+CREAR_CLOUDFRONT=no bash deploy/aws/crear-infraestructura.sh
+```
 
 ### Camino manual
 
@@ -172,6 +216,7 @@ sudo nano /opt/tesis/entorno.env
 ```ini
 DATABASE_URL=postgresql://tesisadmin:TU_CLAVE@<EndpointBaseDatos>:5432/estudiantes
 CORS_ORIGINS=https://<dominio de CloudFront>
+# En la fase 8 se añade aquí también el subdominio de la API, separado por coma.
 DOCUMENTO_KEY=<la misma que en tu .env local>
 DOCUMENTO_PEPPER=<la misma que en tu .env local>
 ```
@@ -235,17 +280,89 @@ Referencia de lo que debe migrar (a 17 de septiembre de 2026):
 Después, reinicia el backend para que use la base nueva:
 
 ```bash
-cd /opt/tesis && sudo docker compose restart api
+cd /opt/tesis && sudo docker compose up -d --force-recreate api
 ```
 
 ---
 
-## 8. Desplegar el frontend
+## 8. Poner HTTPS en la API
+
+**Este paso va antes del frontend, no después.** CloudFront sirve la interfaz
+por HTTPS, y el navegador bloquea que una página HTTPS llame a una API por
+HTTP: es la regla del *contenido mixto*. Si compilas el frontend apuntando a
+`http://<IpServidor>`, la aplicación se abrirá pero ninguna petición saldrá, y
+tendrás que repetir la fase del frontend entera. Con el backend ya en marcha,
+este es el momento en que conoces la URL definitiva de la API.
+
+### 8.1 Un subdominio que apunte a la instancia
+
+Let's Encrypt no emite certificados para una IP, así que hace falta un nombre.
+Si no tienes dominio propio, [duckdns.org](https://www.duckdns.org) da uno
+gratis en dos minutos: inicias sesión con Google o GitHub, escribes un nombre
+(por ejemplo `tesis-tdah`) y pones la IP pública de la instancia.
+
+Queda un dominio del tipo `tesis-tdah.duckdns.org`. **No necesitas el token de
+DuckDNS**: la validación de Let's Encrypt es por HTTP, no por DNS — basta con
+que el nombre resuelva a la IP.
+
+> Usa la **IP elástica** de la pila, no la IP temporal de la instancia. La
+> plantilla ya crea una precisamente para que el certificado no se rompa al
+> reiniciar.
+
+Comprueba que el DNS ya se propagó:
+
+```bash
+nslookup tesis-tdah.duckdns.org        # debe devolver la IP elástica
+```
+
+### 8.2 Ejecutar el script en la instancia
+
+```bash
+scp -i tesis-tdah.pem deploy/aws/configurar-https.sh ec2-user@<IpServidor>:/tmp/
+ssh -i tesis-tdah.pem ec2-user@<IpServidor>
+sudo bash /tmp/configurar-https.sh tesis-tdah.duckdns.org tu-correo@ejemplo.com
+```
+
+Qué hace, en orden: comprueba que el dominio apunte de verdad aquí, instala
+certbot, deja un archivo de prueba y verifica que se alcanza desde fuera, pide
+el certificado, reescribe `nginx.conf` para el puerto 443 (guardando el
+anterior en `nginx.conf.http.bak`), reinicia nginx e instala la renovación
+automática. Si algo falla, se detiene antes de tocar la configuración que ya
+funcionaba.
+
+El certificado dura 90 días y se renueva solo a los 60, mediante
+`/etc/cron.daily/renovar-certificado-tesis`.
+
+### 8.3 Añadir el dominio a CORS
+
+El backend solo acepta peticiones de los orígenes que tenga declarados:
+
+```bash
+sudo nano /opt/tesis/entorno.env
+# CORS_ORIGINS=https://<dominio CloudFront>,https://tesis-tdah.duckdns.org
+cd /opt/tesis && sudo docker compose up -d --force-recreate api
+```
+
+Comprobación:
+
+```bash
+curl https://tesis-tdah.duckdns.org/          # {"status":"ok", ...}
+curl -I http://tesis-tdah.duckdns.org/        # 301 hacia https
+```
+
+> **Si no quieres subdominio**, la alternativa es poner CloudFront delante de
+> la API también, con un segundo *origin* apuntando a la IP: CloudFront ofrece
+> HTTPS al usuario y habla HTTP con la instancia. No está en la plantilla
+> porque obliga a decidir el reparto de rutas entre los dos *origins*.
+
+---
+
+## 9. Desplegar el frontend
 
 ```bash
 export BUCKET_FRONTEND=<BucketFrontendNombre>
 export ID_DISTRIBUCION=<IdDistribucion>
-export VITE_API_URL=http://<IpServidor>      # SIN «/api» al final
+export VITE_API_URL=https://tesis-tdah.duckdns.org   # SIN «/api» al final
 bash deploy/aws/desplegar-frontend.sh
 ```
 
@@ -253,42 +370,24 @@ bash deploy/aws/desplegar-frontend.sh
 > (`frontend/src/lib/api.js`). Si lo pones, las peticiones irán a `/api/api` y
 > devolverán 404. El script lo rechaza si te equivocas.
 
+> La URL queda **compilada dentro** del JavaScript. Cambiarla más adelante
+> obliga a volver a ejecutar este script; no es una variable de entorno que el
+> navegador lea al arrancar.
+
 ---
 
-## 9. Comprobar que todo funciona
+## 10. Comprobar que todo funciona
 
 ```bash
-curl http://<IpServidor>/                              # la API responde
+curl https://tesis-tdah.duckdns.org/                   # la API responde
 curl -I https://<dominio CloudFront>                   # la interfaz se sirve
-curl -s -X POST http://<IpServidor>/api/auth/login \
+curl -s -X POST https://tesis-tdah.duckdns.org/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"usuario":"admin","password":"..."}'            # la base responde
 ```
 
 Y en el navegador: entrar, abrir el Dashboard General, generar una predicción
 y descargar un expediente.
-
----
-
-## 10. Advertencia importante: HTTPS
-
-Tal como queda, **la interfaz va por HTTPS (CloudFront) pero la API por HTTP**.
-Los navegadores bloquean el contenido mixto: una página HTTPS no puede llamar a
-una API HTTP.
-
-**Consecuencia: la aplicación no funcionará hasta resolverlo.** Hay tres vías:
-
-1. **Un dominio propio + certificado gratuito** (Let's Encrypt en nginx, o ACM
-   con un balanceador). Es la solución correcta. Necesitas un dominio.
-2. **Servir también el frontend desde la instancia**, de modo que todo sea HTTP
-   del mismo origen. Funciona para una demostración, pero pierdes CloudFront y
-   el diagrama deja de corresponder.
-3. **Poner CloudFront delante de la API también**, con un segundo *origin* que
-   apunte a la IP. CloudFront pone el HTTPS de cara al usuario y habla HTTP con
-   la instancia por detrás. Es lo más rápido sin comprar dominio.
-
-**La opción 3 es la recomendada si no tienes dominio.** No está en la plantilla
-porque requiere decidir el reparto de rutas; pídemelo y lo añado.
 
 ---
 
@@ -317,5 +416,7 @@ aws cloudformation delete-stack --stack-name tesis-tdah
 | `docker-compose.yml` | Cómo corren nginx y la API en la instancia |
 | `nginx.conf` | Proxy inverso, límites de subida y cabeceras |
 | `desplegar-backend.sh` | Construye, envía y levanta el backend |
+| `configurar-https.sh` | Pide el certificado de Let's Encrypt y pasa nginx a 443 |
+| `anadir-cloudfront.sh` | Añade el frontend a una pila creada sin CloudFront |
 | `desplegar-frontend.sh` | Compila React, sube a S3 e invalida la caché |
 | `migrar-neon-a-rds.sh` | Copia los datos, comparando filas antes y después |

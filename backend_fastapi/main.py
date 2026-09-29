@@ -36,6 +36,25 @@ Base.metadata.create_all(bind=engine)
 # (en PostgreSQL una sentencia fallida invalida toda la transacción abierta).
 _cols_alumnos = _columnas("alumnos")
 
+# Quién respondió la escala EDAH. Se añade como NULL: las encuestas ya
+# registradas no lo tienen y sería falso inventarles un informante.
+if "encuestas" in _tablas and "informante" not in _columnas("encuestas"):
+    with engine.connect() as _conn:
+        _conn.execute(text("ALTER TABLE encuestas ADD COLUMN informante VARCHAR(30)"))
+        _conn.commit()
+
+# El control de inasistencias pasa de un contador agregado a registros con
+# fecha. Los días que ya constaban no tienen fecha —nadie la anotó— así que se
+# conservan en «inasistencias_previas»: descartarlos falsearía el historial de
+# 19 alumnos y cambiaría sus predicciones.
+if "alumnos" in _tablas and "inasistencias_previas" not in _cols_alumnos:
+    with engine.connect() as _conn:
+        _conn.execute(text(
+            "ALTER TABLE alumnos ADD COLUMN inasistencias_previas INTEGER NOT NULL DEFAULT 0"
+        ))
+        _conn.execute(text("UPDATE alumnos SET inasistencias_previas = inasistencias"))
+        _conn.commit()
+
 if "alumnos" in _tablas and "genero" not in _cols_alumnos:
     with engine.connect() as _conn:
         _conn.execute(text(

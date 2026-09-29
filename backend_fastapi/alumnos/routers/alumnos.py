@@ -1,16 +1,36 @@
 import re
+from datetime import date, datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from database import get_db
 from alumnos.models import (
-    Alumno, Encuesta, ExpedientePsicologico, Nota, PrediccionAcademica,
+    Alumno, Asistencia, Encuesta, ExpedientePsicologico, HistorialInasistencias,
+    Nota, PrediccionAcademica, Usuario,
 )
 from alumnos.services import generar_prediccion_alumno
+from alumnos.services import auth_service as auth
 from alumnos.services import cripto_service as cripto
+
+
+def _usuario_opcional(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+) -> Optional[Usuario]:
+    """Quien esta llamando, si se puede saber.
+
+    El router ya esta protegido a nivel de aplicacion, asi que aqui no hace
+    falta volver a exigir sesion: solo se quiere el nombre para dejarlo en el
+    historial. Si no se puede resolver, se anota como desconocido en lugar de
+    rechazar una operacion que por lo demas es valida.
+    """
+    try:
+        return auth.usuario_de_token(db, auth.extraer_token(authorization))
+    except Exception:
+        return None
 
 router = APIRouter()
 
@@ -245,6 +265,7 @@ def update_inasistencias(
     alumno_id: int,
     data: InasistenciasUpdate,
     db: Session = Depends(get_db),
+    usuario: Optional[Usuario] = Depends(_usuario_opcional),
 ):
     """Persiste las inasistencias acumuladas y actualiza el vector predictivo.
 
@@ -255,7 +276,21 @@ def update_inasistencias(
     generará cuando exista la encuesta.
     """
     a = _get_alumno(db, alumno_id)
+    anterior = int(getattr(a, "inasistencias", 0) or 0)
     a.inasistencias = data.inasistencias
+
+    # Queda constancia del cambio. Sin esto solo se conserva el ultimo numero y
+    # no hay forma de distinguir una correccion de captura de un empeoramiento
+    # real del estudiante, ni de saber quien lo registro.
+    if anterior != data.inasistencias:
+        db.add(HistorialInasistencias(
+            alumno_id=alumno_id,
+            valor_anterior=anterior,
+            valor_nuevo=data.inasistencias,
+            anio_lectivo=getattr(a, "anio_cursada", None),
+            registrado_por=getattr(usuario, "usuario", None) if usuario else None,
+        ))
+
     db.commit()
     db.refresh(a)
 
@@ -275,6 +310,45 @@ def update_inasistencias(
             f"Inasistencias actualizadas a {data.inasistencias} día(s)."
             + (" Predicción recalculada." if prediccion_actualizada else "")
         ),
+    }
+
+
+@router.get("/alumnos/{alumno_id}/inasistencias/historial")
+def historial_inasistencias(alumno_id: int, db: Session = Depends(get_db)):
+    """Cambios registrados en el contador de inasistencias de un estudiante.
+
+    Responde a lo que el numero suelto no puede: cuando subio, cuanto subio de
+    una vez y quien lo anoto. Un salto de 4 a 40 dias en una sola anotacion se
+    parece mas a un error de captura que a un mes de ausencias, y el modelo de
+    riesgo usa ese dato.
+    """
+    a = _get_alumno(db, alumno_id)
+    filas = (
+        db.query(HistorialInasistencias)
+        .filter(HistorialInasistencias.alumno_id == alumno_id)
+        .order_by(HistorialInasistencias.fecha.desc(), HistorialInasistencias.id.desc())
+        .limit(100)
+        .all()
+    )
+    return {
+        "alumno": alumno_id,
+        "valor_actual": int(getattr(a, "inasistencias", 0) or 0),
+        "anio_lectivo": getattr(a, "anio_cursada", None),
+        # El tope es del ano lectivo completo: decirlo evita que «45» se lea
+        # como un porcentaje o como dias de un bimestre.
+        "maximo_admitido": MAX_INASISTENCIAS,
+        "movimientos": [
+            {
+                "id": h.id,
+                "valor_anterior": h.valor_anterior,
+                "valor_nuevo": h.valor_nuevo,
+                "diferencia": h.valor_nuevo - h.valor_anterior,
+                "anio_lectivo": h.anio_lectivo,
+                "registrado_por": h.registrado_por or "No consta",
+                "fecha": h.fecha.isoformat() if h.fecha else None,
+            }
+            for h in filas
+        ],
     }
 
 
@@ -314,3 +388,180 @@ def delete_alumno(alumno_id: int, db: Session = Depends(get_db)):
 
     db.delete(a)
     db.commit()
+
+
+# ══ Asistencia por fecha ══════════════════════════════════════════════════
+# Sustituye al contador agregado. «N dias» no permitia saber si las faltas
+# estaban repartidas o concentradas en una semana, y eso significa cosas muy
+# distintas para un tutor.
+
+ESTADOS_ASISTENCIA = ("Asistió", "No asistió")
+
+
+class AsistenciaIn(BaseModel):
+    fecha: date
+    estado: str
+
+    @field_validator("estado")
+    @classmethod
+    def _estado_valido(cls, v: str) -> str:
+        limpio = _limpiar(v)
+        if limpio not in ESTADOS_ASISTENCIA:
+            raise ValueError(f"El estado debe ser {' o '.join(ESTADOS_ASISTENCIA)}.")
+        return limpio
+
+    @field_validator("fecha")
+    @classmethod
+    def _fecha_valida(cls, v: date) -> date:
+        # Sabado=5, domingo=6. No hay clase, así que registrar una falta esos
+        # días solo puede ser un error de quien la anota.
+        if v.weekday() >= 5:
+            dia = "sábado" if v.weekday() == 5 else "domingo"
+            raise ValueError(f"El {dia} no es día lectivo: no se registra asistencia.")
+        if v > date.today():
+            raise ValueError("No se puede registrar la asistencia de un día que aún no ha ocurrido.")
+        return v
+
+
+def _recalcular_inasistencias(db: Session, alumno_id: int) -> int:
+    """Deja Alumno.inasistencias al día y devuelve el total.
+
+    El total es el que consume el modelo de riesgo, así que no puede quedar
+    desincronizado de los registros: se recalcula entero en lugar de sumar o
+    restar uno, que es donde aparecen los descuadres.
+    """
+    a = _get_alumno(db, alumno_id)
+    con_fecha = (
+        db.query(Asistencia)
+        .filter(Asistencia.alumno_id == alumno_id, Asistencia.estado == "No asistió")
+        .count()
+    )
+    a.inasistencias = int(getattr(a, "inasistencias_previas", 0) or 0) + con_fecha
+    return a.inasistencias
+
+
+def _asistencia_dict(x: Asistencia) -> dict:
+    return {
+        "id": x.id,
+        "fecha": x.fecha.isoformat() if x.fecha else None,
+        "estado": x.estado,
+        "registrado_por": x.registrado_por or "No consta",
+        "fecha_registro": x.fecha_registro.isoformat() if x.fecha_registro else None,
+    }
+
+
+@router.get("/alumnos/{alumno_id}/asistencias")
+def listar_asistencias(alumno_id: int, db: Session = Depends(get_db)):
+    """Registros de asistencia de un alumno, del más reciente al más antiguo."""
+    a = _get_alumno(db, alumno_id)
+    filas = (
+        db.query(Asistencia)
+        .filter(Asistencia.alumno_id == alumno_id)
+        .order_by(Asistencia.fecha.desc())
+        .all()
+    )
+    previas = int(getattr(a, "inasistencias_previas", 0) or 0)
+    faltas = sum(1 for x in filas if x.estado == "No asistió")
+    return {
+        "alumno": alumno_id,
+        "registros": [_asistencia_dict(x) for x in filas],
+        "faltas_con_fecha": faltas,
+        # Se declara aparte, no se suma en silencio: son días que constaban como
+        # total agregado antes de que existiera este registro y nadie anotó su
+        # fecha. Ocultarlos haría que el total no cuadrase con la lista.
+        "inasistencias_previas": previas,
+        "total": previas + faltas,
+        "maximo_admitido": MAX_INASISTENCIAS,
+        "anio_lectivo": getattr(a, "anio_cursada", None),
+    }
+
+
+@router.post("/alumnos/{alumno_id}/asistencias", status_code=201)
+def registrar_asistencia(
+    alumno_id: int,
+    data: AsistenciaIn,
+    db: Session = Depends(get_db),
+    usuario: Optional[Usuario] = Depends(_usuario_opcional),
+):
+    """Registra si el alumno asistió o no en una fecha concreta.
+
+    Si ya existe un registro de ese día, se corrige en lugar de duplicarlo: un
+    alumno no puede haber asistido y faltado el mismo día.
+    """
+    _get_alumno(db, alumno_id)
+    quien = getattr(usuario, "usuario", None) if usuario else None
+
+    existente = (
+        db.query(Asistencia)
+        .filter(Asistencia.alumno_id == alumno_id, Asistencia.fecha == data.fecha)
+        .first()
+    )
+    if existente:
+        anterior = existente.estado
+        existente.estado = data.estado
+        existente.registrado_por = quien
+        existente.fecha_registro = datetime.utcnow()
+        registro, corregido = existente, anterior != data.estado
+    else:
+        registro = Asistencia(
+            alumno_id=alumno_id, fecha=data.fecha, estado=data.estado,
+            registrado_por=quien,
+        )
+        db.add(registro)
+        corregido = False
+
+    db.flush()
+    total = _recalcular_inasistencias(db, alumno_id)
+    db.commit()
+    db.refresh(registro)
+
+    # Las inasistencias son una de las tres variables del modelo, así que la
+    # predicción vigente queda obsoleta en cuanto cambia el total.
+    prediccion_actualizada = False
+    try:
+        generar_prediccion_alumno(db, alumno_id)
+        prediccion_actualizada = True
+    except HTTPException:
+        pass
+
+    return {
+        "registro": _asistencia_dict(registro),
+        "total_inasistencias": total,
+        "prediccion_actualizada": prediccion_actualizada,
+        "mensaje": (
+            ("Registro corregido: " if corregido else "")
+            + f"{data.estado} el {data.fecha.strftime('%d/%m/%Y')}. "
+            + f"Total de inasistencias: {total} día(s)."
+            + (" Predicción recalculada." if prediccion_actualizada else "")
+        ),
+    }
+
+
+@router.delete("/alumnos/{alumno_id}/asistencias/{asistencia_id}", status_code=200)
+def borrar_asistencia(alumno_id: int, asistencia_id: int, db: Session = Depends(get_db)):
+    """Retira un registro anotado por error."""
+    _get_alumno(db, alumno_id)
+    x = (
+        db.query(Asistencia)
+        .filter(Asistencia.id == asistencia_id, Asistencia.alumno_id == alumno_id)
+        .first()
+    )
+    if not x:
+        raise HTTPException(status_code=404, detail="Ese registro no existe.")
+
+    fecha = x.fecha
+    db.delete(x)
+    db.flush()
+    total = _recalcular_inasistencias(db, alumno_id)
+    db.commit()
+
+    try:
+        generar_prediccion_alumno(db, alumno_id)
+    except HTTPException:
+        pass
+
+    return {
+        "mensaje": f"Registro del {fecha.strftime('%d/%m/%Y')} eliminado. "
+                   f"Total de inasistencias: {total} día(s).",
+        "total_inasistencias": total,
+    }

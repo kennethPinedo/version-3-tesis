@@ -18,6 +18,15 @@ venv/
 *.env
 !.env.example
 
+# Claves SSH de AWS. crear-infraestructura.sh deja el .pem en la raiz y AWS no
+# lo vuelve a entregar: perderlo deja la instancia inaccesible, publicarlo la
+# deja abierta a cualquiera.
+*.pem
+*.ppk
+# Credenciales de acceso descargadas de la consola de IAM
+*accessKeys*.csv
+*credentials*.csv
+
 # Node / Frontend
 frontend/node_modules/
 frontend/dist/

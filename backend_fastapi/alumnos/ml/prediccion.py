@@ -231,3 +231,120 @@ def obtener_shap_riesgo(promedio_num: float, inasistencias: int, prob_tdah: floa
               f"{top['label']} ({top['value_fmt']}). El riesgo integra el rendimiento académico, "
               f"las inasistencias y la probabilidad de TDAH.")
     return {"nivel": nivel, "features": feats, "interpretacion": interp}
+
+
+# ── Influencia global de cada variable ───────────────────────────────────────
+# Lo anterior (obtener_shap) explica UNA predicción concreta. Esto explica el
+# MODELO: qué variables pesan más en general, no para un estudiante.
+#
+# Se usa la ganancia ("gain"), no la frecuencia: la frecuencia cuenta cuántas
+# veces se usó una variable para cortar, y premia a las que tienen muchos
+# valores distintos aunque cada corte aporte poco. La ganancia mide cuánta
+# impureza elimina realmente cada corte, que es lo que significa "influye".
+
+# Etiquetas legibles para el docente. El modelo ve "Item_01"; nadie más debería.
+_ETIQUETAS_EDAH = {
+    "Item_01": "HI1 · Se mueve en exceso, inquieto",
+    "Item_02": "HI2 · Actúa sin pensar, impulsivo",
+    "Item_03": "HI3 · Interrumpe a los demás",
+    "Item_04": "HI4 · Le cuesta esperar su turno",
+    "Item_05": "HI5 · Habla en exceso",
+    "Item_06": "DA1 · Se distrae con facilidad",
+    "Item_07": "DA2 · No termina lo que empieza",
+    "Item_08": "DA3 · Parece no escuchar",
+    "Item_09": "DA4 · Olvida o pierde cosas",
+    "Item_10": "DA5 · Evita tareas de esfuerzo mental",
+    "Item_11": "TC1 · Discute con adultos",
+    "Item_12": "TC2 · Desafía las normas",
+    "Item_13": "TC3 · Molesta a otros a propósito",
+    "Item_14": "TC4 · Culpa a los demás de sus errores",
+    "Item_15": "TC5 · Se enfada con facilidad",
+    "Item_16": "TC6 · Es rencoroso o vengativo",
+    "Item_17": "TC7 · Miente para conseguir algo",
+    "Item_18": "TC8 · Pelea físicamente",
+    "Item_19": "TC9 · Se ausenta sin permiso",
+    "Item_20": "TC10 · Coge cosas ajenas",
+}
+
+_ETIQUETAS_RIESGO = {
+    "Promedio_Cont": "Promedio de notas",
+    "Promedio_Final_Num": "Promedio de notas",
+    "Inasistencias": "Días de inasistencia",
+    "Prob_TDAH": "Probabilidad de TDAH",
+}
+
+_GRUPOS_EDAH = {"HI": "Hiperactividad / Impulsividad",
+                "DA": "Déficit de atención",
+                "TC": "Trastornos de conducta"}
+
+
+def _importancias(m, etiquetas):
+    """Ganancia total por variable, normalizada a porcentaje y ordenada.
+
+    Se usa «total_gain» y no «gain». La diferencia importa: «gain» es la mejora
+    MEDIA por corte, asi que una variable usada una sola vez con mucha ganancia
+    aparece tan influyente como otra usada en quinientos cortes. «total_gain»
+    multiplica por el numero de cortes, que es lo que de verdad significa
+    «cuanto influye esta variable en el modelo».
+
+    Los nombres se toman del propio booster, no de una lista paralela: si el
+    modelo se reentrena con otro orden o con otra nomenclatura, esto sigue
+    siendo correcto en lugar de asignar cifras a la variable equivocada.
+    """
+    if m is None:
+        return []
+    try:
+        booster = m.get_booster()
+        crudas = booster.get_score(importance_type="total_gain")
+        nombres = booster.feature_names or list(crudas.keys())
+    except Exception:
+        return []
+
+    # Las variables que nunca se usaron para cortar no aparecen en el diccionario:
+    # valen 0, que no es lo mismo que «falta el dato».
+    valores = [float(crudas.get(n, 0.0)) for n in nombres]
+
+    total = sum(valores) or 1.0
+    filas = [
+        {
+            "variable": nombre,
+            "etiqueta": etiquetas.get(nombre, nombre),
+            "ganancia": round(v, 4),
+            "porcentaje": round(100 * v / total, 2),
+        }
+        for nombre, v in zip(nombres, valores)
+    ]
+    filas.sort(key=lambda x: -x["porcentaje"])
+    return filas
+
+
+def influencia_tdah() -> dict:
+    """Cuánto pesa cada ítem EDAH en el modelo de TDAH."""
+    filas = _importancias(modelo, _ETIQUETAS_EDAH)
+
+    # Agregado por subescala: es la lectura que le sirve al psicólogo, porque
+    # el EDAH se interpreta por bloques, no ítem a ítem.
+    por_grupo = {g: 0.0 for g in _GRUPOS_EDAH}
+    for f in filas:
+        n = int(f["variable"].split("_")[1])
+        g = "HI" if n <= 5 else ("DA" if n <= 10 else "TC")
+        por_grupo[g] += f["porcentaje"]
+
+    return {
+        "modelo": "TDAH (20 ítems EDAH)",
+        "n_variables": len(_FEATURE_NAMES),
+        "variables": filas,
+        "por_subescala": [
+            {"clave": g, "nombre": _GRUPOS_EDAH[g], "porcentaje": round(p, 2)}
+            for g, p in sorted(por_grupo.items(), key=lambda x: -x[1])
+        ],
+    }
+
+
+def influencia_riesgo() -> dict:
+    """Cuánto pesa cada variable en el modelo de riesgo académico."""
+    return {
+        "modelo": "Riesgo académico",
+        "n_variables": len(_FEATURES_RIESGO),
+        "variables": _importancias(modelo_riesgo, _ETIQUETAS_RIESGO),
+    }

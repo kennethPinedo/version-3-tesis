@@ -25,6 +25,10 @@ export const VISTAS = [
   "predicciones",
   "notas",
   "expediente",
+  // Las dos últimas son transversales: no tratan un alumno concreto sino el
+  // sistema en sí, por eso van al final y separadas del flujo de trabajo.
+  "metricas",
+  "accesos",
 ];
 
 /** @type {Record<Vista, {icon: string, label: string}>} */
@@ -38,6 +42,8 @@ export const NAV_LABELS = {
   predicciones:  { icon: "↗", label: "Historial de Predicciones" },
   notas:         { icon: "✎", label: "Subir Notas" },
   expediente:    { icon: "⊡", label: "Expediente Psicológico" },
+  metricas:      { icon: "◑", label: "Métricas del Modelo" },
+  accesos:       { icon: "⚿", label: "Accesos y Seguridad" },
 };
 
 /**
@@ -56,6 +62,10 @@ const PERMISOS = {
     "inasistencias",
     "predicciones",
     "notas",
+    // Ve las métricas: quien usa una predicción para decidir sobre un alumno
+    // necesita saber cuánto se equivoca el modelo. Ocultarlo invitaría a
+    // tratarlo como un oráculo.
+    "metricas",
   ],
   "Psicólogo": [
     "general",
@@ -64,7 +74,10 @@ const PERMISOS = {
     "encuesta",
     "predicciones",
     "expediente",
+    "metricas",
   ],
+  // «accesos» queda solo para Administrador, y el backend lo comprueba otra
+  // vez: ocultar el menú no es un control de seguridad, solo de comodidad.
 };
 
 /**

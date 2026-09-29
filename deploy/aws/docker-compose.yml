@@ -3,8 +3,9 @@
 # Se copia a /opt/tesis/docker-compose.yml y se levanta con:
 #     cd /opt/tesis && docker compose up -d
 #
-# Nginx va delante por dos razones: el navegador pide el puerto 80 (no el 8000)
-# y es el punto donde luego se instala el certificado HTTPS sin tocar la API.
+# Nginx va delante por tres razones: el navegador pide el puerto 80 (no el
+# 8000), es donde se instala el certificado HTTPS sin tocar la API, y atiende
+# el reto de Let's Encrypt para renovarlo solo.
 
 services:
 
@@ -39,8 +40,17 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      # 443 se publica desde el principio aunque todavía no haya certificado:
+      # así activar HTTPS no obliga a recrear el contenedor.
+      - "443:443"
     volumes:
       - /opt/tesis/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Certificados de Let's Encrypt. Antes de configurar HTTPS la carpeta
+      # está vacía y nginx no la mira, porque su configuración aún no
+      # menciona ningún certificado.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Donde certbot deja el archivo de reto que Let's Encrypt viene a leer.
+      - /opt/tesis/certbot/www:/var/www/certbot:ro
     depends_on:
       - api
     logging:

@@ -1,18 +1,6 @@
-import { FILTROS_INICIALES, hayFiltroActivo } from "../lib/predicciones";
-
-const OPCIONES_TDAH = [
-  { value: "Todos", label: "Todos" },
-  { value: "Alta",  label: "Probabilidad Alta" },
-  { value: "Media", label: "Probabilidad Media" },
-  { value: "Baja",  label: "Probabilidad Baja" },
-];
-
-const OPCIONES_RIESGO = [
-  { value: "Todos", label: "Todos" },
-  { value: "Alto",  label: "Alto" },
-  { value: "Medio", label: "Medio" },
-  { value: "Bajo",  label: "Bajo" },
-];
+import {
+  FILTROS_INICIALES, hayFiltroActivo, OPCIONES_RIESGO, OPCIONES_TDAH,
+} from "../lib/predicciones";
 
 /**
  * Controles de filtrado cruzado (AND) para los dashboards.

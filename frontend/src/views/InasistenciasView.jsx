@@ -1,147 +1,193 @@
-import { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { reqJson } from "../lib/api";
 
 /**
- * Módulo "Control de Inasistencias" (rol Docente).
+ * Control de Inasistencias.
  *
- * Registra los días de inasistencia acumulados del estudiante. Es un módulo
- * INDEPENDIENTE de la encuesta EDAH: el instrumento psicométrico contiene
- * únicamente sus 20 ítems. Al guardar, el backend recalcula la predicción
- * porque las inasistencias son una de las tres variables del MODELO 2.
+ * Se registra la asistencia POR FECHA, no como un total acumulado. El contador
+ * anterior decía «7 días» sin decir cuáles, y eso no permitía distinguir siete
+ * faltas repartidas en el año de una semana entera seguida, que para un tutor
+ * significan cosas distintas.
  *
- * @param {Object} props
- * @param {Array<{id:number, nombre:string, apellido:string, grado:string, inasistencias?:number}>} props.alumnos
- * @param {() => Promise<void>|void} props.onGuardado  Refresca datos del padre.
- * @param {(msg: string, error?: boolean) => void} [props.notify]  Toast global.
- * @param {(opciones: Object) => Promise<boolean>} [props.confirmar]  Diálogo previo.
+ * Se anota también la asistencia, no solo la falta: «asistió» distingue «vino
+ * ese día» de «nadie lo anotó», y esa diferencia importa cuando alguien revisa
+ * el historial meses después.
  */
-export default function InasistenciasView({ alumnos, onGuardado, notify, confirmar }) {
+
+const ESTADOS = ["No asistió", "Asistió"];
+
+/** Fecha de hoy en formato yyyy-mm-dd, en hora local (no UTC). */
+function hoyISO() {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * Día de la semana de una fecha yyyy-mm-dd, sin pasar por UTC.
+ *
+ * `new Date("2026-09-26")` se interpreta como medianoche UTC, así que en Perú
+ * (UTC-5) devuelve el día anterior y un sábado pasaría por viernes.
+ */
+function diaSemana(iso) {
+  const [a, m, d] = iso.split("-").map(Number);
+  return new Date(a, m - 1, d).getDay(); // 0=domingo, 6=sábado
+}
+
+const esFinDeSemana = (iso) => [0, 6].includes(diaSemana(iso));
+
+const NOMBRE_DIA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
+
+function formatearFecha(iso) {
+  if (!iso) return "—";
+  const [a, m, d] = iso.split("-").map(Number);
+  const f = new Date(a, m - 1, d);
+  return `${NOMBRE_DIA[f.getDay()]} ${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${a}`;
+}
+
+export default function InasistenciasView({ alumnos, notify, confirmar, onGuardado }) {
   const [alumnoId, setAlumnoId] = useState("");
-  const [dias, setDias] = useState("0");
-  const [loading, setLoading] = useState(false);
+  const [fecha, setFecha] = useState(hoyISO());
+  const [estado, setEstado] = useState(ESTADOS[0]);
+  const [datos, setDatos] = useState(null);
+  const [guardando, setGuardando] = useState(false);
   const [feedback, setFeedback] = useState({ msg: "", error: false });
 
   const alumnoSel = alumnos.find((a) => String(a.id) === String(alumnoId)) ?? null;
 
-  // Precarga el valor vigente del alumno seleccionado.
+  const cargar = useCallback(() => {
+    if (!alumnoId) { setDatos(null); return; }
+    reqJson(`/alumnos/${alumnoId}/asistencias`)
+      .then(setDatos)
+      .catch(() => setDatos(null));
+  }, [alumnoId]);
+
   useEffect(() => {
     setFeedback({ msg: "", error: false });
-    setDias(alumnoSel ? String(alumnoSel.inasistencias ?? 0) : "0");
-  }, [alumnoId]); // eslint-disable-line react-hooks/exhaustive-deps
+    cargar();
+  }, [cargar]);
+
+  // El navegador bloquea los fines de semana solo si se le impide elegirlos, y
+  // el atributo `max` evita además las fechas futuras.
+  const finde = fecha && esFinDeSemana(fecha);
 
   const guardar = async (e) => {
     e.preventDefault();
-    if (!alumnoId) {
-      setFeedback({ msg: "Selecciona un estudiante.", error: true });
-      return;
-    }
-    const valor = Number(dias);
-    if (!Number.isInteger(valor) || valor < 0) {
-      setFeedback({ msg: "Los días de inasistencia deben ser un entero mayor o igual a 0.", error: true });
+    if (!alumnoId) { setFeedback({ msg: "Selecciona un estudiante.", error: true }); return; }
+    if (finde) {
+      setFeedback({ msg: `El ${NOMBRE_DIA[diaSemana(fecha)]} no es día lectivo.`, error: true });
       return;
     }
 
-    const previo = Number(alumnoSel?.inasistencias ?? 0);
+    const yaExiste = datos?.registros?.find((r) => r.fecha === fecha);
     if (confirmar && !await confirmar({
-      titulo: `¿Actualizar las inasistencias de ${alumnoSel ? `${alumnoSel.nombre} ${alumnoSel.apellido}` : "el estudiante"}?`,
-      mensaje: "Las inasistencias son una de las tres variables del modelo de riesgo "
-             + "académico, así que la predicción del estudiante se recalculará con el "
-             + "valor nuevo.",
+      titulo: yaExiste
+        ? `¿Corregir el registro del ${formatearFecha(fecha)}?`
+        : `¿Registrar «${estado}» el ${formatearFecha(fecha)}?`,
+      mensaje: yaExiste
+        ? `Ese día ya estaba anotado como «${yaExiste.estado}». Se reemplazará por «${estado}».`
+        : "Si el estado es «No asistió», el total del estudiante sube en uno y su "
+          + "predicción de riesgo se recalcula.",
       detalles: [
         { etiqueta: "Estudiante", valor: alumnoSel ? `${alumnoSel.nombre} ${alumnoSel.apellido}` : "—" },
-        { etiqueta: "Días", antes: `${previo} día(s)`, valor: `${valor} día(s)` },
+        { etiqueta: "Fecha", valor: formatearFecha(fecha) },
+        { etiqueta: "Estado", valor: estado, antes: yaExiste?.estado },
       ],
-      tono: "aviso",
-      textoConfirmar: "Sí, actualizar",
+      tono: yaExiste ? "aviso" : "normal",
+      textoConfirmar: yaExiste ? "Sí, corregir" : "Sí, registrar",
     })) return;
 
-    setLoading(true);
-    setFeedback({ msg: "", error: false });
+    setGuardando(true);
     try {
-      const res = await reqJson(
-        `/alumnos/${alumnoId}/inasistencias`,
-        "PUT",
-        { inasistencias: valor }
-      );
-      // Solo se informa cuando la predicción SÍ se recalculó. Que falte la
-      // encuesta EDAH no es un error ni algo que el docente deba resolver
-      // desde esta pantalla, así que no se le menciona.
-      const extra = res.prediccion_actualizada
-        ? " La predicción del estudiante se recalculó con el nuevo valor."
-        : "";
-      setFeedback({ msg: (res.mensaje ?? "Inasistencias guardadas.") + extra, error: false });
-      notify?.(`Inasistencias actualizadas: ${valor} día(s).`);
+      const r = await reqJson(`/alumnos/${alumnoId}/asistencias`, "POST", { fecha, estado });
+      setFeedback({ msg: r.mensaje, error: false });
+      notify?.(r.mensaje);
+      cargar();
       await onGuardado?.();
     } catch (err) {
-      setFeedback({ msg: err.message || "No se pudieron guardar las inasistencias.", error: true });
+      setFeedback({ msg: err.message || "No se pudo registrar.", error: true });
     } finally {
-      setLoading(false);
+      setGuardando(false);
     }
   };
+
+  const borrar = async (registro) => {
+    if (confirmar && !await confirmar({
+      titulo: `¿Eliminar el registro del ${formatearFecha(registro.fecha)}?`,
+      mensaje: registro.estado === "No asistió"
+        ? "El total de inasistencias bajará en uno y la predicción se recalculará."
+        : "Ese día dejará de constar como asistido.",
+      tono: "peligro",
+      textoConfirmar: "Sí, eliminar",
+    })) return;
+
+    try {
+      const r = await reqJson(`/alumnos/${alumnoId}/asistencias/${registro.id}`, "DELETE");
+      notify?.(r.mensaje);
+      cargar();
+      await onGuardado?.();
+    } catch (err) {
+      notify?.(err.message || "No se pudo eliminar.", true);
+    }
+  };
+
+  const faltas = useMemo(
+    () => (datos?.registros ?? []).filter((r) => r.estado === "No asistió"),
+    [datos],
+  );
 
   return (
     <div className="notas-layout">
       <h1 className="page-title">Control de Inasistencias</h1>
+
       <article className="panel panel-notas">
         <p className="form-legend full">
-          Registra los días de inasistencia acumulados del estudiante. Este dato alimenta
-          directamente el modelo de <strong>Riesgo Académico</strong>, junto con las notas y
-          la probabilidad de TDAH.
+          Se registra día a día. Los sábados y domingos no son lectivos y el
+          calendario no permite elegirlos.
         </p>
 
-        <form className="grid notas-form" onSubmit={guardar}>
+        <form className="grid" onSubmit={guardar}>
           <div className="field-group full">
-            <label htmlFor="inasist-alumno">Estudiante</label>
-            <select
-              id="inasist-alumno"
-              value={alumnoId}
-              onChange={(e) => setAlumnoId(e.target.value)}
-              disabled={loading}
-              required
-            >
+            <label htmlFor="asist-alumno">Estudiante</label>
+            <select id="asist-alumno" value={alumnoId} onChange={(e) => setAlumnoId(e.target.value)} required>
               <option value="">-- Selecciona --</option>
               {alumnos.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.nombre} {a.apellido} - {a.grado}
-                </option>
+                <option key={a.id} value={a.id}>{a.nombre} {a.apellido} — {a.grado}</option>
               ))}
             </select>
           </div>
 
-          <div className="field-group full" style={{ maxWidth: 280 }}>
-            <label htmlFor="inasist-dias">Días de inasistencia acumulados</label>
+          <div className="field-group">
+            <label htmlFor="asist-estado">¿Asistió?</label>
+            <select id="asist-estado" value={estado} onChange={(e) => setEstado(e.target.value)}>
+              {ESTADOS.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+
+          <div className="field-group">
+            <label htmlFor="asist-fecha">Fecha</label>
             <input
-              id="inasist-dias"
-              type="number"
-              min="0"
-              step="1"
-              max="365"
-              aria-describedby="inasist-ayuda"
-              value={dias}
-              onChange={(e) => setDias(e.target.value)}
-              disabled={loading || !alumnoId}
+              id="asist-fecha"
+              type="date"
+              value={fecha}
+              max={hoyISO()}
+              onChange={(e) => setFecha(e.target.value)}
+              aria-describedby="asist-fecha-ayuda"
               required
             />
-            <span id="inasist-ayuda" className="form-legend" style={{ marginTop: 6 }}>
-              Número entero de 0 a 365. Al guardar se recalcula la predicción del estudiante.
+            <span id="asist-fecha-ayuda" className="form-legend" style={{ marginTop: 4 }}>
+              {finde
+                ? <strong style={{ color: "var(--alto)" }}>
+                    El {NOMBRE_DIA[diaSemana(fecha)]} no es día lectivo.
+                  </strong>
+                : <>Día lectivo, de lunes a viernes. No se admiten fechas futuras.</>}
             </span>
           </div>
 
-          {alumnoSel && (
-            <div
-              className="full"
-              style={{ padding: "10px 14px", background: "var(--superficie-2)", borderRadius: 8, fontSize: "0.92rem" }}
-            >
-              <b>Valor registrado actualmente:</b>{" "}
-              <span style={{ fontWeight: 700, color: "var(--marca-oscura)" }}>
-                {alumnoSel.inasistencias ?? 0} día(s)
-              </span>
-            </div>
-          )}
-
           {feedback.msg && (
             <div
-              className={feedback.error ? "alert-error" : "alert-success"}
+              className={`full ${feedback.error ? "alert-error" : "alert-success"}`}
               role={feedback.error ? "alert" : "status"}
               aria-live="polite"
             >
@@ -149,11 +195,91 @@ export default function InasistenciasView({ alumnos, onGuardado, notify, confirm
             </div>
           )}
 
-          <button className="full" type="submit" disabled={loading || !alumnoId}>
-            {loading ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Guardando…</>) : "Guardar Inasistencias"}
+          <button className="full" type="submit" disabled={guardando || !alumnoId || finde}>
+            {guardando
+              ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Guardando…</>)
+              : "Registrar"}
           </button>
         </form>
       </article>
+
+      {alumnoSel && datos && (
+        <article className="panel">
+          <h2 className="chart-title">
+            Histórico de {alumnoSel.nombre} {alumnoSel.apellido}
+          </h2>
+
+          {datos.registros.length === 0 ? (
+            <p className="form-legend">
+              Todavía no hay días registrados para este estudiante.
+            </p>
+          ) : (
+            <div className="asist-tabla-wrap">
+              <table className="tabla">
+                <thead>
+                  <tr><th>Estudiante</th><th>Fecha</th><th>Estado</th><th>Registrado por</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {datos.registros.map((r) => (
+                    <tr key={r.id}>
+                      <td>{alumnoSel.nombre} {alumnoSel.apellido}</td>
+                      <td>{formatearFecha(r.fecha)}</td>
+                      <td>
+                        {/* El icono acompaña al color: con deuteranopia el rojo
+                            y el cian se distinguen, pero el símbolo no depende
+                            de verlos (WCAG 1.4.1). */}
+                        <span className={r.estado === "No asistió" ? "asist-falta" : "asist-ok"}>
+                          <span aria-hidden="true">{r.estado === "No asistió" ? "✕" : "✓"}</span> {r.estado}
+                        </span>
+                      </td>
+                      <td>{r.registrado_por}</td>
+                      <td>
+                        <button type="button" className="lista-btn lista-btn--del" onClick={() => borrar(r)}>
+                          Eliminar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* El total es lo que consume el modelo de riesgo, así que se muestra
+              desglosado: si no cuadrase con la lista, habría que poder ver por qué. */}
+          <div className="asist-total">
+            <div className="asist-total-fila">
+              <span>Inasistencias con fecha registrada</span>
+              <strong>{datos.faltas_con_fecha}</strong>
+            </div>
+            {datos.inasistencias_previas > 0 && (
+              <div className="asist-total-fila asist-total-fila--nota">
+                <span>
+                  Anteriores a este registro
+                  <br />
+                  <span className="form-legend">
+                    Constaban como total acumulado, sin fecha anotada. Se conservan
+                    para no alterar el historial del estudiante.
+                  </span>
+                </span>
+                <strong>{datos.inasistencias_previas}</strong>
+              </div>
+            )}
+            <div className="asist-total-fila asist-total-fila--suma">
+              <span>Total de inasistencias</span>
+              <strong>{datos.total} día(s)</strong>
+            </div>
+          </div>
+
+          {faltas.length > 0 && (
+            <p className="form-legend" style={{ marginTop: "var(--e3)" }}>
+              Este total es una de las tres variables del modelo de riesgo académico,
+              junto al promedio de notas y la probabilidad de TDAH. Cada cambio
+              recalcula la predicción del estudiante.
+            </p>
+          )}
+        </article>
+      )}
     </div>
   );
 }

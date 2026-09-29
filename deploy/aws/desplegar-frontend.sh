@@ -3,7 +3,7 @@
 #
 #     export BUCKET_FRONTEND=tesis-tdah-frontend-123456789012
 #     export ID_DISTRIBUCION=E1ABCDEFGHIJKL
-#     export VITE_API_URL=http://52.x.x.x      # SIN /api al final
+#     export VITE_API_URL=https://mi-tesis.duckdns.org   # SIN /api al final
 #     bash deploy/aws/desplegar-frontend.sh
 
 set -euo pipefail
@@ -31,6 +31,25 @@ if [[ "$VITE_API_URL" == */api ]]; then
   echo "ERROR: VITE_API_URL no debe terminar en «/api»."
   echo "   El cliente lo añade solo; con «/api» las peticiones irían a /api/api."
   echo "   Usa: ${VITE_API_URL%/api}"
+  exit 1
+fi
+
+# CloudFront sirve esta interfaz por HTTPS, y el navegador no deja que una
+# página HTTPS llame a una API HTTP. Compilar así produce una aplicación que
+# carga pero en la que nada funciona, y el error solo se ve en la consola del
+# navegador: mejor pararlo aquí.
+if [[ "$VITE_API_URL" == http://* && "${PERMITIR_HTTP:-}" != "1" ]]; then
+  cat <<AYUDA
+ERROR: VITE_API_URL usa http:// y la interfaz se sirve por https://.
+   El navegador bloqueará todas las llamadas (contenido mixto).
+
+   Pon primero HTTPS en la API:
+       sudo bash configurar-https.sh <subdominio> <tu correo>
+   y vuelve con:
+       export VITE_API_URL=https://<subdominio>
+
+   Si compilas a propósito para probar en local, repite con PERMITIR_HTTP=1.
+AYUDA
   exit 1
 fi
 

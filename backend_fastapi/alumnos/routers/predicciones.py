@@ -18,6 +18,18 @@ _ML_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ml"))
 _METRICAS_PATH = os.path.join(_ML_DIR, "metricas.json")
 _METRICAS_RIESGO_PATH = os.path.join(_ML_DIR, "metricas_riesgo.json")
 
+# Validación contra los 30 estudiantes reales del centro, con el dictamen del
+# psicólogo y de los profesores como referencia. Es una evaluación DISTINTA de
+# la partición de validación del entrenamiento: aquella mide cómo generaliza
+# sobre los datos sintéticos con los que se entrenó, esta mide si acierta sobre
+# personas reales. Son las cifras que sostienen la tesis, y las que aparecen en
+# las matrices de confusión del documento.
+#
+# Copiadas desde TEST_VALIDACION/ a propósito: esa carpeta está en
+# .dockerignore, así que no viaja en la imagen del contenedor.
+_TEST_TDAH_PATH = os.path.join(_ML_DIR, "metricas_test_tdah.json")
+_TEST_RIESGO_PATH = os.path.join(_ML_DIR, "metricas_test_riesgo.json")
+
 
 def _leer_json(path: str) -> dict:
     try:
@@ -37,6 +49,79 @@ def get_metricas():
 def get_metricas_riesgo():
     """Métricas macro del MODELO 2 (Riesgo Académico)."""
     return _leer_json(_METRICAS_RIESGO_PATH)
+
+
+@router.get("/metricas/influencia/")
+def get_influencia():
+    """Cuánto pesa cada variable en cada modelo, y qué significa cada métrica.
+
+    Responde a una pregunta distinta de la que responde SHAP. SHAP explica UNA
+    predicción: «por qué este estudiante salió en riesgo alto». Esto explica el
+    MODELO: «en qué se fija en general». Las dos hacen falta, y confundirlas es
+    el error habitual al presentar resultados.
+    """
+    from alumnos.ml.prediccion import influencia_riesgo, influencia_tdah
+
+    return {
+        "tdah": influencia_tdah(),
+        "riesgo": influencia_riesgo(),
+        # Las dos evaluaciones, juntas y etiquetadas. Mostrar solo una lleva al
+        # malentendido que motivó esto: la aplicación decía 80% de exactitud en
+        # TDAH mientras el documento de la tesis decía 93,3%, y ambas cifras
+        # eran correctas porque medían cosas distintas.
+        "test_real": {
+            "tdah": _leer_json(_TEST_TDAH_PATH),
+            "riesgo": _leer_json(_TEST_RIESGO_PATH),
+        },
+        # Se explican aquí, y no en el frontend, para que la definición no
+        # pueda divergir de la métrica que acompaña.
+        "glosario": [
+            {
+                "clave": "accuracy",
+                "nombre": "Exactitud",
+                "que_mide": "De todos los casos, qué porcentaje clasificó bien.",
+                "cuidado": "Engaña cuando las clases están desbalanceadas: si el "
+                           "95% de los alumnos no tiene TDAH, decir siempre «no» "
+                           "da 95% de exactitud sin detectar a nadie.",
+            },
+            {
+                "clave": "recall_macro",
+                "nombre": "Sensibilidad (recall)",
+                "que_mide": "De los alumnos que SÍ presentan la condición, a "
+                            "cuántos detectó.",
+                "cuidado": "Es la métrica que más importa en un tamizaje: un falso "
+                           "negativo es un estudiante que necesita apoyo y no lo "
+                           "recibe. Se prefiere sobre la precisión.",
+            },
+            {
+                "clave": "precision_macro",
+                "nombre": "Precisión",
+                "que_mide": "De los que el modelo señaló, cuántos lo eran de verdad.",
+                "cuidado": "Una precisión baja satura al psicólogo con "
+                           "derivaciones que no corresponden.",
+            },
+            {
+                "clave": "f1_macro",
+                "nombre": "F1",
+                "que_mide": "Media armónica entre precisión y sensibilidad.",
+                "cuidado": "Resume ambas en un número, pero oculta cuál de las dos "
+                           "es la débil. Mírala junto a las otras, no en lugar de ellas.",
+            },
+            {
+                "clave": "especificidad",
+                "nombre": "Especificidad",
+                "que_mide": "De los que NO presentan la condición, a cuántos "
+                            "descartó correctamente.",
+                "cuidado": "Complementa a la sensibilidad: juntas describen los dos "
+                           "tipos de error que puede cometer el tamizaje.",
+            },
+        ],
+        "aviso": (
+            "El sistema es una herramienta de TAMIZAJE, no de diagnóstico. "
+            "Señala a quién conviene evaluar; el diagnóstico de TDAH solo puede "
+            "emitirlo un profesional de la salud."
+        ),
+    }
 
 
 class GenerarPrediccionIn(BaseModel):

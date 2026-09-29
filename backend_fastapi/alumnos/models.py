@@ -1,5 +1,7 @@
 from datetime import date, datetime
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Date
+from sqlalchemy import (
+    Column, Integer, String, Float, DateTime, ForeignKey, Date, UniqueConstraint,
+)
 from database import Base
 
 
@@ -28,10 +30,14 @@ class Alumno(Base):
     tipo_documento = Column(String(20), nullable=True)      # DNI | CE | PASAPORTE
     documento_cifrado = Column(String(255), nullable=True)
     documento_huella = Column(String(64), unique=True, nullable=True, index=True)
-    # Inasistencias acumuladas del alumno. Se registran en el módulo
-    # "Control de Inasistencias" (rol Docente), NO en la encuesta EDAH: el
-    # instrumento psicométrico contiene únicamente sus 20 ítems.
+    # Total que consume el modelo de riesgo. Ya no se escribe a mano: se
+    # mantiene como la suma de «inasistencias_previas» más los días con estado
+    # "No asistió" en la tabla asistencias.
     inasistencias = Column(Integer, default=0, nullable=False)
+    # Días que constaban como total agregado ANTES de que existiera el registro
+    # por fecha. No se pueden convertir en fechas concretas porque nadie las
+    # anotó, y descartarlos falsearía el historial de 19 alumnos reales.
+    inasistencias_previas = Column(Integer, default=0, nullable=False)
 
 
 class Encuesta(Base):
@@ -66,6 +72,13 @@ class Encuesta(Base):
     # independiente). La columna se conserva —y se sigue escribiendo en 0— para
     # no romper bases de datos ya creadas con NOT NULL.
     inasistencias = Column(Integer, default=0, nullable=False)
+    # Quién respondió la escala. El EDAH no lo contesta el niño: lo rellena un
+    # adulto que lo observa a diario, y la interpretación clínica depende de
+    # quién sea. Un docente ve la conducta en clase y un familiar la ve en casa;
+    # una misma puntuación no significa lo mismo según la fuente. Sin este dato
+    # la encuesta no es interpretable ni reproducible.
+    # Nullable porque las 35 encuestas ya registradas no lo tienen.
+    informante = Column(String(30), nullable=True)
     # Se mantiene Date (no se migra el tipo para no romper BD existentes). El
     # desempate de dos encuestas del mismo día se resuelve ordenando además por
     # id descendente en las consultas.
@@ -151,3 +164,57 @@ class SolicitudRecuperacion(Base):
     fecha_solicitud = Column(DateTime, default=datetime.utcnow)
     expira = Column(DateTime, nullable=False)
     fecha_atencion = Column(DateTime, nullable=True)
+
+
+class HistorialInasistencias(Base):
+    """Cada cambio del contador de inasistencias de un estudiante.
+
+    Alumno.inasistencias guarda un unico numero que se sobrescribe, asi que por
+    si solo no permite responder ni «cuando subio» ni «quien lo cambio». Eso
+    importa por dos motivos: las inasistencias pesan en el modelo de riesgo, y
+    ante una correccion posterior hay que poder distinguir un error de captura
+    de un empeoramiento real del estudiante.
+
+    Es un registro de solo anadidura: nunca se modifica una fila existente.
+    """
+    __tablename__ = "historial_inasistencias"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alumno_id = Column(Integer, ForeignKey("alumnos.id"), nullable=False, index=True)
+    # Se guarda el antes y el despues, no la diferencia: asi una fila se
+    # entiende sola, sin tener que reconstruir la cadena desde el principio.
+    valor_anterior = Column(Integer, nullable=False)
+    valor_nuevo = Column(Integer, nullable=False)
+    # Periodo al que corresponden los dias. Sin el, «45 dias» no significa nada.
+    anio_lectivo = Column(Integer, nullable=True)
+    # Nombre de usuario, no su id: si la cuenta se borrara, el registro debe
+    # seguir diciendo quien hizo el cambio.
+    registrado_por = Column(String(50), nullable=True)
+    fecha = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class Asistencia(Base):
+    """Asistencia de un alumno en UNA fecha concreta.
+
+    Sustituye al contador agregado: antes solo se guardaba «N dias», sin saber
+    cuales. Con la fecha se puede responder si las faltas estan repartidas o
+    concentradas en una semana, que significa cosas distintas.
+
+    Se registra tambien la asistencia, no solo la falta: «asistio» es un dato
+    positivo que distingue «vino ese dia» de «nadie lo anoto».
+    """
+    __tablename__ = "asistencias"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alumno_id = Column(Integer, ForeignKey("alumnos.id"), nullable=False, index=True)
+    fecha = Column(Date, nullable=False, index=True)
+    # "Asistio" | "No asistio"
+    estado = Column(String(20), nullable=False)
+    registrado_por = Column(String(50), nullable=True)
+    fecha_registro = Column(DateTime, default=datetime.utcnow)
+
+    # Un alumno no puede tener dos registros del mismo dia: si se corrige, se
+    # actualiza el que ya existe en lugar de acumular contradicciones.
+    __table_args__ = (
+        UniqueConstraint("alumno_id", "fecha", name="uq_asistencia_alumno_fecha"),
+    )

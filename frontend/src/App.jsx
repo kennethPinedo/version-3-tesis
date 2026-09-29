@@ -8,13 +8,16 @@ import { req, reqJson } from "./lib/api";
 import { guardarToken, borrarToken, leerToken } from "./lib/sesion";
 import { NAV_LABELS, puedeGestionarAlumnos, puedeVer, viewsDeRol, vistaInicial } from "./lib/rbac";
 import {
-  FILTROS_INICIALES, PROB_COLORS, RIESGO_COLORS, contarPorGrupo, filtrarPredicciones,
-  formatFecha, hayFiltroActivo, tdahNivelProb, tdahTexto, ultimaPorAlumno,
+  FILTROS_INICIALES, OPCIONES_RIESGO, OPCIONES_TDAH, PROB_COLORS, RIESGO_COLORS,
+  contarPorGrupo, filtrarPredicciones, formatFecha, hayFiltroActivo,
+  tdahNivelProb, tdahTexto, ultimaPorAlumno,
 } from "./lib/predicciones";
 import FiltrosPrediccion from "./components/FiltrosPrediccion";
 import RecomendacionesPanel from "./components/RecomendacionesPanel";
 import CargaMasivaNotas from "./components/CargaMasivaNotas";
 import InasistenciasView from "./views/InasistenciasView";
+import MetricasView from "./views/MetricasView";
+import AccesosView from "./views/AccesosView";
 import { useConfirmacion } from "./lib/useConfirmacion";
 
 const encuestaKeys = [
@@ -109,6 +112,46 @@ const TIPOS_DOCUMENTO = {
 // secundaria, que es donde se aplica el instrumento.
 const NIVELES = { Primaria: [6], Secundaria: [1] };
 
+/**
+ * Valores de género, en una sola lista.
+ *
+ * Estaban escritos dos veces: el alta ofrecía tres opciones y la edición
+ * cuatro. El resultado era que 6 de los 39 alumnos tienen «No especificado»
+ * —valor que el backend admite— y no había forma de asignarlo al registrar.
+ * Con una constante única, los dos formularios no pueden volver a divergir.
+ */
+const GENEROS = ["Masculino", "Femenino", "Otro", "No especificado"];
+
+/**
+ * Quién responde la escala EDAH.
+ *
+ * El EDAH no lo contesta el estudiante: lo rellena un adulto que lo observa a
+ * diario. Un docente ve la conducta en clase y un familiar la ve en casa, así
+ * que una misma puntuación no significa lo mismo según la fuente. El psicólogo
+ * casi siempre transcribe lo que respondió otro; solo es informante cuando ha
+ * observado directamente. Sin este dato la encuesta no es interpretable.
+ */
+const INFORMANTES = ["Docente", "Padre/Madre/Apoderado", "Psicologo (observacion directa)"];
+
+/**
+ * Indicador no cromático de cada nivel de riesgo.
+ *
+ * WCAG 1.4.1 no admite transmitir información solo con color, y aquí el motivo
+ * es concreto: con deuteranopia (~6% de los varones) el ámbar y el verde de la
+ * escala anterior se veían casi idénticos. La flecha dice lo mismo que el color
+ * para quien no distingue los tonos, y refuerza el orden para quien sí.
+ * Van con aria-hidden porque el nivel ya se escribe en texto al lado: leerlos
+ * dos veces solo estorbaría a quien use lector de pantalla.
+ */
+const ICONO_NIVEL = {
+  Alto: "▲",
+  Medio: "■",
+  Bajo: "▼",
+  "Sospecha Alta": "▲",
+  "Sospecha Media": "■",
+  "Sospecha Baja": "▼",
+};
+
 // Mismo enmascarado que aplica el backend, para que el diálogo de confirmación
 // muestre el documento sin exhibirlo entero.
 const enmascararDoc = (n) => {
@@ -126,12 +169,16 @@ const initialAlumno = {
   tipo_documento: "DNI", numero_documento: "",
 };
 
-const initialEncuesta = Object.fromEntries([["alumno", ""], ...encuestaKeys.map((k) => [k, "0"])]);
+// El informante por defecto es el docente: es quien aplica la escala en la
+// practica del centro. Aun asi es un desplegable, no un valor fijo.
+const initialEncuesta = Object.fromEntries([
+  ["alumno", ""], ["informante", "Docente"], ...encuestaKeys.map((k) => [k, "0"]),
+]);
 const initialNota = { alumno: "", bimestre: "1" };
 
 /* ── Chart & dashboard helpers ─────────────────────────────────────────── */
 
-const FACTOR_COLORS = ["#a78bfa", "#34d399", "#60a5fa", "#fbbf24", "#f87171", "#22d3ee"];
+const FACTOR_COLORS = ["var(--marca-fuerte)", "var(--bajo)", "var(--dato)", "var(--medio)", "var(--alto)", "var(--bajo)"];
 
 function buildAcadPieData(nivelRiesgo, probabilidad) {
   // Dona invertida (medidor de seguridad): el verde ("Bajo") es la parte SIN
@@ -462,7 +509,7 @@ function ShapFactores({ features }) {
       {features.map((f) => {
         const pct = Math.max(Math.round((Math.abs(f.shap) / maxAbs) * 100), 4);
         const up = f.shap > 0;
-        const color = up ? "#ef4444" : "#22c55e";
+        const color = up ? "var(--alto)" : "var(--bajo)";
         return (
           <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10, margin: "7px 0" }}>
             <div style={{ width: 210, flexShrink: 0, fontSize: "0.82rem", color: "var(--tinta-media)" }}>
@@ -513,6 +560,14 @@ export default function App() {
     nombre: "",
   });
   const [autenticando, setAutenticando] = useState(false);
+  // Recuperación de contraseña: un paso aparte del login, no un modal encima.
+  const [recuperando, setRecuperando] = useState(false);
+  const [recUsuario, setRecUsuario] = useState("");
+  const [recEnviando, setRecEnviando] = useState(false);
+  const [recEnviado, setRecEnviado] = useState("");
+  // Las credenciales de la pantalla de acceso vienen del servidor, no escritas
+  // aqui: llegaron a anunciar una contrasena que esa cuenta ya no tenia.
+  const [cuentasDemo, setCuentasDemo] = useState(null);
   const [restaurando, setRestaurando] = useState(Boolean(leerToken()));
 
 
@@ -554,6 +609,7 @@ export default function App() {
 
   // Dashboard general + métricas + encuesta (ver respuestas)
   const [metricas, setMetricas] = useState(null);
+  const [metricasTest, setMetricasTest] = useState(null);
   // Filtros cruzados (TDAH AND riesgo) del Dashboard General.
   const [filtrosGeneral, setFiltrosGeneral] = useState({ ...FILTROS_INICIALES });
   const [encuestaModo, setEncuestaModo] = useState("registrar");  // registrar | respuestas
@@ -595,6 +651,11 @@ export default function App() {
 
   async function loadMetricas() {
     try { setMetricas(await req("/metricas/")); } catch { setMetricas(null); }
+    // La validación contra los 30 estudiantes reales. Es la cifra que sostiene
+    // la tesis, así que es la que se enseña aquí; la de entrenamiento queda en
+    // la vista «Métricas del Modelo», donde hay sitio para explicar la
+    // diferencia sin confundir a quien solo pasa por el panel.
+    try { setMetricasTest(await req("/metricas/influencia/")); } catch { setMetricasTest(null); }
   }
 
   const alumnoOptions = useMemo(
@@ -745,6 +806,36 @@ export default function App() {
     return () => { cancelado = true; };
   }, []);
 
+  useEffect(() => {
+    let vivo = true;
+    reqJson("/auth/cuentas-demo")
+      .then((d) => vivo && setCuentasDemo(d))
+      .catch(() => vivo && setCuentasDemo(null));
+    return () => { vivo = false; };
+  }, []);
+
+  const onRecuperar = async (e) => {
+    e.preventDefault();
+    setRecEnviando(true);
+    try {
+      const r = await reqJson("/auth/recuperar", "POST", { usuario: recUsuario.trim() });
+      // El servidor responde lo mismo exista o no la cuenta, a propósito: si
+      // confirmara cuáles existen, bastaría probar nombres para enumerarlas.
+      setRecEnviado(r.mensaje);
+    } catch (err) {
+      notify(err.message || "No se pudo conectar con el servidor.", true);
+    } finally {
+      setRecEnviando(false);
+    }
+  };
+
+  const volverAlLogin = () => {
+    setRecuperando(false);
+    setRecEnviado("");
+    setRecUsuario("");
+    setStatus({ msg: "", error: false });
+  };
+
   const onLogin = async (e) => {
     e.preventDefault();
     setAutenticando(true);
@@ -824,7 +915,7 @@ export default function App() {
   const submitEncuesta = async (e) => {
     e.preventDefault();
     setEncuestaStatus({ msg: "", error: false });
-    const body = { alumno: Number(encuestaForm.alumno) };
+    const body = { alumno: Number(encuestaForm.alumno), informante: encuestaForm.informante };
     encuestaKeys.forEach((k) => { body[k] = Number(encuestaForm[k]); });
 
     const evaluado = alumnos.find((a) => String(a.id) === String(encuestaForm.alumno));
@@ -1014,6 +1105,56 @@ export default function App() {
     );
   }
 
+  if (!auth.logged && recuperando) {
+    return (
+      <PantallaAcceso>
+        {dialogo}
+        <section className="auth-card">
+          <h1>Recuperar acceso</h1>
+
+          {recEnviado ? (
+            <>
+              <p className="alert-success" role="status" aria-live="polite">{recEnviado}</p>
+              <p className="form-legend" style={{ marginTop: "var(--e3)" }}>
+                El administrador define una contraseña nueva y te la entrega en
+                persona. No se envía por correo ni por mensaje: así no queda una
+                credencial válida circulando por ningún canal.
+              </p>
+              <button type="button" onClick={volverAlLogin} style={{ marginTop: "var(--e4)" }}>
+                Volver al inicio de sesión
+              </button>
+            </>
+          ) : (
+            <>
+              <p>Indica tu usuario y avisaremos al administrador del sistema.</p>
+              <form onSubmit={onRecuperar}>
+                <label htmlFor="rec-usuario">Usuario</label>
+                <input
+                  id="rec-usuario"
+                  autoComplete="username"
+                  value={recUsuario}
+                  onChange={(e) => setRecUsuario(e.target.value)}
+                  autoFocus
+                  required
+                />
+                <button type="submit" style={{ marginTop: "var(--e4)" }} disabled={recEnviando}>
+                  {recEnviando
+                    ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Registrando…</>)
+                    : "Solicitar restablecimiento"}
+                </button>
+              </form>
+              <p className="auth-enlace">
+                <button type="button" className="enlace" onClick={volverAlLogin}>
+                  Volver al inicio de sesión
+                </button>
+              </p>
+            </>
+          )}
+        </section>
+      </PantallaAcceso>
+    );
+  }
+
   if (!auth.logged) {
     return (
       <PantallaAcceso>
@@ -1047,11 +1188,32 @@ export default function App() {
                 </button>
               </form>
 
-              <div className="form-legend" style={{ marginTop: "var(--e4)", lineHeight: 1.9 }}>
-                <div>Administrador — <strong>admin</strong> / admin123</div>
-                <div>Psicólogo — <strong>psicologo</strong> / psico123</div>
-                <div>Docente — <strong>docente</strong> / docente123</div>
-              </div>
+              {/* Enlace, no botón: no ejecuta la acción, abre otro paso. Va
+                  fuera del formulario para que Enter siga enviando el login. */}
+              <p className="auth-enlace">
+                <button type="button" className="enlace" onClick={() => setRecuperando(true)}>
+                  ¿Olvidaste tu contraseña?
+                </button>
+              </p>
+
+              {cuentasDemo && (
+                <div className="form-legend" style={{ marginTop: "var(--e4)", lineHeight: 1.9 }}>
+                  {cuentasDemo.cuentas.map((c) => (
+                    <div key={c.usuario}>
+                      {c.rol} — <strong>{c.usuario}</strong> / {c.password}
+                    </div>
+                  ))}
+                  {/* Una cuenta cuya contrasena ya se cambio desaparece de la
+                      lista. Se avisa de que existe, porque si no pareceria que
+                      la cuenta se borro. */}
+                  {cuentasDemo.cuentas.length < cuentasDemo.total_cuentas && (
+                    <div style={{ color: "var(--tinta-suave)" }}>
+                      {cuentasDemo.total_cuentas - cuentasDemo.cuentas.length} cuenta(s) más
+                      con contraseña ya cambiada: consulta con el administrador.
+                    </div>
+                  )}
+                </div>
+              )}
 
           {status.msg && (
             <p
@@ -1218,20 +1380,18 @@ export default function App() {
                       <label htmlFor="dash-friesgo">Riesgo académico</label>
                       <select id="dash-friesgo" value={dashBorrador.riesgo}
                               onChange={(e) => setDashBorrador({ ...dashBorrador, riesgo: e.target.value })}>
-                        <option value="Todos">Todos</option>
-                        <option value="Alto">Alto</option>
-                        <option value="Medio">Medio</option>
-                        <option value="Bajo">Bajo</option>
+                        {OPCIONES_RIESGO.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
                       </select>
                     </div>
                     <div className="field-group">
                       <label htmlFor="dash-ftdah">Probabilidad de TDAH</label>
                       <select id="dash-ftdah" value={dashBorrador.tdah}
                               onChange={(e) => setDashBorrador({ ...dashBorrador, tdah: e.target.value })}>
-                        <option value="Todos">Todas</option>
-                        <option value="Alta">Alta</option>
-                        <option value="Media">Media</option>
-                        <option value="Baja">Baja</option>
+                        {OPCIONES_TDAH.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -1492,12 +1652,14 @@ export default function App() {
           const filtroActivo = hayFiltroActivo(filtrosGeneral);
           const m = metricas?.val;
 
+          // El icono no es decoración: con deuteranopia los tres niveles se
+          // parecen, y WCAG 1.4.1 prohíbe que el color sea el único indicador.
           const chip = (valor, count, color, tipo) => (
-            <div key={valor}
-              style={{ flex: 1, minWidth: 90, padding: "12px", borderRadius: 10, textAlign: "center",
-                border: "1px solid #e2e8f0", background: "#fff" }}>
-              <div style={{ fontSize: "1.8rem", fontWeight: 800, color }}>{count}</div>
-              <div style={{ fontSize: "0.82rem", color: "#64748b" }}>{tipo === "tdah" ? `Probabilidad ${valor}` : valor}</div>
+            <div key={valor} className="chip-conteo">
+              <div className="chip-conteo-v" style={{ color }}>
+                <span aria-hidden="true">{ICONO_NIVEL[valor] ?? ""}</span> {count}
+              </div>
+              <div className="chip-conteo-l">{tipo === "tdah" ? `Probabilidad ${valor}` : valor}</div>
             </div>
           );
 
@@ -1514,10 +1676,10 @@ export default function App() {
 
               {/* Resumen — reacciona al filtro cruzado */}
               <div className="kpi-row">
-                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Alumnos registrados</span><span className="kpi-value" style={{ color: "#2563eb" }}>{alumnos.length}</span></div></div>
-                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">{filtroActivo ? "Alumnos filtrados" : "Alumnos evaluados"}</span><span className="kpi-value" style={{ color: "#0ea5e9" }}>{filtrados.length}</span></div></div>
-                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Riesgo Académico Alto</span><span className="kpi-value" style={{ color: "#ef4444" }}>{riesgoCount.Alto}</span></div></div>
-                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Prob. Alta de TDAH</span><span className="kpi-value" style={{ color: "#ef4444" }}>{tdahCount.Alta}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Alumnos registrados</span><span className="kpi-value" style={{ color: "var(--dato)" }}>{alumnos.length}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">{filtroActivo ? "Alumnos filtrados" : "Alumnos evaluados"}</span><span className="kpi-value" style={{ color: "var(--dato)" }}>{filtrados.length}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Riesgo Académico Alto</span><span className="kpi-value" style={{ color: "var(--alto)" }}>{riesgoCount.Alto}</span></div></div>
+                <div className="kpi-card"><div className="kpi-body"><span className="kpi-label">Prob. Alta de TDAH</span><span className="kpi-value" style={{ color: "var(--alto)" }}>{tdahCount.Alta}</span></div></div>
               </div>
 
               {/* Distribución dentro de la selección filtrada */}
@@ -1557,7 +1719,7 @@ export default function App() {
                           <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
                           <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b></td>
                           <td>{p.inasistencias ?? 0}</td>
-                          <td style={{ fontSize: "0.8rem", color: "#64748b" }}>{formatFecha(p.fecha_prediccion)}</td>
+                          <td style={{ fontSize: "0.8rem", color: "var(--tinta-suave)" }}>{formatFecha(p.fecha_prediccion)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1565,13 +1727,44 @@ export default function App() {
                 )}
               </article>
 
-              {/* Métricas del modelo */}
+              {/* Fiabilidad del modelo.
+                  Antes este panel mostraba la validación de entrenamiento (80%
+                  de exactitud en TDAH) mientras el documento de la tesis decía
+                  93,3%. Las dos cifras eran ciertas y medían cosas distintas,
+                  pero verlas sin contexto hacía parecer que una estaba mal.
+                  Aquí se enseña la que se contrastó con personas reales. */}
               <article className="panel" style={{ marginTop: 16 }}>
-                <h3 className="chart-title">Métricas del Modelo (macro · conjunto de validación)</h3>
-                {m ? (
+                <h3 className="chart-title">Fiabilidad del modelo · validado con estudiantes reales</h3>
+                {metricasTest?.test_real?.tdah?.n ? (
+                  <>
+                    <div className="kpi-row">
+                      {[
+                        ["Indicador de TDAH", metricasTest.test_real.tdah],
+                        ["Riesgo académico", metricasTest.test_real.riesgo],
+                      ].map(([lbl, t]) => (
+                        <div key={lbl} className="kpi-card">
+                          <div className="kpi-body">
+                            <span className="kpi-label">{lbl}</span>
+                            <span className="kpi-value" style={{ color: "var(--dato)" }}>
+                              {(t.accuracy * 100).toFixed(1)}%
+                            </span>
+                            <span className="kpi-sub">
+                              {Math.round(t.accuracy * t.n)} de {t.n} estudiantes
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="form-legend" style={{ marginTop: "var(--e3)" }}>
+                      Contrastado con el dictamen del psicólogo y de los profesores.
+                      El desglose por nivel, las matrices de confusión y la
+                      validación de entrenamiento están en <strong>Métricas del Modelo</strong>.
+                    </p>
+                  </>
+                ) : m ? (
                   <div className="kpi-row">
                     {[["Accuracy", m.accuracy], ["Precisión", m.precision_macro], ["Recall", m.recall_macro], ["F1-Score", m.f1_macro], ["Especificidad", m.especificidad_macro]].map(([lbl, val]) => (
-                      <div key={lbl} className="kpi-card"><div className="kpi-body"><span className="kpi-label">{lbl}</span><span className="kpi-value" style={{ color: "#2563eb" }}>{(val * 100).toFixed(1)}%</span></div></div>
+                      <div key={lbl} className="kpi-card"><div className="kpi-body"><span className="kpi-label">{lbl}</span><span className="kpi-value" style={{ color: "var(--dato)" }}>{(val * 100).toFixed(1)}%</span></div></div>
                     ))}
                   </div>
                 ) : <p style={{ color: "var(--tinta-suave)" }}>Métricas no disponibles (ejecuta el entrenamiento).</p>}
@@ -1683,9 +1876,7 @@ export default function App() {
                   <label htmlFor="alumno-genero">Género</label>
                   <select id="alumno-genero" value={alumnoForm.genero} onChange={(e) => setAlumnoForm({ ...alumnoForm, genero: e.target.value })} required>
                     <option value="">Selecciona</option>
-                    <option value="Masculino">Masculino</option>
-                    <option value="Femenino">Femenino</option>
-                    <option value="Otro">Otro</option>
+                    {GENEROS.map((g) => <option key={g} value={g}>{g}</option>)}
                   </select>
                 </div>
 
@@ -1703,9 +1894,9 @@ export default function App() {
 
           const estadoAlumno = (id) => {
             const p = predsPorAlumno[id];
-            if (!p) return { label: "Registrado", color: "#64748b" };
-            if (p.nivel_riesgo) return { label: "Con Predicción", color: "#0093c4" };
-            return { label: "Evaluado", color: "#16a34a" };
+            if (!p) return { label: "Registrado", color: "var(--tinta-suave)" };
+            if (p.nivel_riesgo) return { label: "Con Predicción", color: "var(--dato)" };
+            return { label: "Evaluado", color: "var(--bajo)" };
           };
 
           const iniciarEdicion = async (a) => {
@@ -1901,7 +2092,7 @@ export default function App() {
                       </p>
                       <p><b>Contacto:</b> {a.contacto_emergente}</p>
                       <p><b>Inasistencias acumuladas:</b> {a.inasistencias ?? 0} día(s)</p>
-                      {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "#d62828" : pred.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {tdahTexto(pred.nivel_tdah)}</p></>}
+                      {pred && <><hr style={{ margin: "12px 0" }} /><p><b>Riesgo académico:</b> <span style={{ color: pred.nivel_riesgo === "Alto" ? "var(--alto)" : pred.nivel_riesgo === "Medio" ? "var(--medio)" : "var(--bajo)", fontWeight: 700 }}>{pred.nivel_riesgo}</span></p><p><b>Indicador TDAH:</b> {tdahTexto(pred.nivel_tdah)}</p></>}
                       <button style={{ marginTop: 16 }} onClick={() => setListaVerAlumno(null)}>Cerrar</button>
                     </div>
                   </div>
@@ -1992,10 +2183,7 @@ export default function App() {
                           value={listaEditForm.genero}
                           onChange={(e) => setListaEditForm({ ...listaEditForm, genero: e.target.value })}
                         >
-                          <option value="Masculino">Masculino</option>
-                          <option value="Femenino">Femenino</option>
-                          <option value="Otro">Otro</option>
-                          <option value="No especificado">No especificado</option>
+                          {GENEROS.map((g) => <option key={g} value={g}>{g}</option>)}
                         </select>
                       </div>
                     </div>
@@ -2088,6 +2276,18 @@ export default function App() {
                     {alumnoOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </div>
+                <div className="field-group full">
+                  <label htmlFor="encuesta-informante">¿Quién responde la escala?</label>
+                  <select id="encuesta-informante" value={encuestaForm.informante}
+                          onChange={(e) => setEncuestaForm({ ...encuestaForm, informante: e.target.value })} required>
+                    {INFORMANTES.map((i) => <option key={i} value={i}>{i}</option>)}
+                  </select>
+                  <p className="form-legend">
+                    La escala la responde quien observa al estudiante a diario, no él mismo.
+                    Quién sea cambia cómo se lee el resultado: la conducta en clase y la
+                    conducta en casa no son lo mismo.
+                  </p>
+                </div>
                 <div className="form-section full encuesta-bloque">
                   <h3 className="form-section__title">Déficit de Atención (DA1-DA5)</h3>
                   <p className="form-legend">{encuestaLeyendaAtencion}</p>
@@ -2149,11 +2349,18 @@ export default function App() {
                 </div>
                 {!encuestaVerAlumno && <p className="form-legend">Selecciona un estudiante para ver sus respuestas.</p>}
                 {encuestaVerAlumno && encuestaRespuestas.length === 0 && <p className="form-legend">No hay encuestas registradas para este estudiante.</p>}
-                {encuestaRespuestas.map((enc) => {
+                {encuestaRespuestas.length > 1 && (
+                  <p className="form-legend" style={{ marginTop: 8 }}>
+                    Este estudiante tiene {encuestaRespuestas.length} aplicaciones de la
+                    escala. Se conservan todas porque comparar dos momentos es parte de la
+                    evaluación; las predicciones usan siempre la más reciente, marcada abajo.
+                  </p>
+                )}
+                {encuestaRespuestas.map((enc, idx) => {
                   const suma = (keys) => keys.reduce((s, k) => s + (enc[k] ?? 0), 0);
                   const bloque = (titulo, keys, max) => (
                     <div key={titulo} style={{ marginBottom: 14 }}>
-                      <h3 className="form-section__title">{titulo} <span style={{ color: "#2563eb" }}>({suma(keys)}/{max})</span></h3>
+                      <h3 className="form-section__title">{titulo} <span style={{ color: "var(--dato)" }}>({suma(keys)}/{max})</span></h3>
                       <table className="lista-table" style={{ width: "100%" }}>
                         <thead><tr><th style={{ width: 55 }}>Ítem</th><th>Pregunta</th><th style={{ width: 170 }}>Respuesta</th></tr></thead>
                         <tbody>
@@ -2166,11 +2373,21 @@ export default function App() {
                   );
                   return (
                     <div key={enc.id} className="card full" style={{ marginTop: 12 }}>
-                      <div style={{ marginBottom: 8, color: "#64748b", fontWeight: 600 }}>📅 {formatFecha(enc.fecha_aplicacion)}</div>
+                      <div className="enc-cab">
+                        <span>📅 {formatFecha(enc.fecha_aplicacion)}</span>
+                        {/* Quién respondió: una misma puntuación no se lee igual según se
+                            observe la conducta en clase o la conducta en casa. */}
+                        <span className="enc-informante">Informante: {enc.informante ?? "No consta"}</span>
+                        {/* La lista llega ordenada de más reciente a más antigua, así que
+                            la primera es la que alimenta las predicciones. */}
+                        {idx === 0 && encuestaRespuestas.length > 1 && (
+                          <span className="enc-vigente">La que usan las predicciones</span>
+                        )}
+                      </div>
                       {bloque("Déficit de Atención (DA)", encuestaKeysDA, 15)}
                       {bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, 15)}
                       {bloque("Trastorno de Conducta (TC)", encuestaKeysTC, 30)}
-                      <p style={{ margin: "8px 0 0", color: "#64748b", fontSize: "0.8rem" }}>
+                      <p style={{ margin: "8px 0 0", color: "var(--tinta-suave)", fontSize: "0.8rem" }}>
                         Total EDAH: {suma(encuestaKeysDA) + suma(encuestaKeysHI) + suma(encuestaKeysTC)}/60
                       </p>
                     </div>
@@ -2195,6 +2412,14 @@ export default function App() {
           />
         )}
 
+        {/* ── Métricas del modelo ────────────────────── */}
+        {activeView === "metricas" && <MetricasView />}
+
+        {/* ── Accesos y seguridad ────────────────────── */}
+        {activeView === "accesos" && (
+          <AccesosView confirmar={confirmar} notify={notify} rolActual={auth.rol} />
+        )}
+
         {/* ── Predicciones ───────────────────────────── */}
         {activeView === "predicciones" && (
           <article className="panel">
@@ -2215,7 +2440,7 @@ export default function App() {
             </div>
             {predicciones.map((p) => {
               const isShapOpen = shapPredId === p.id;
-              const rColor = p.nivel_riesgo === "Alto" ? "#d62828" : p.nivel_riesgo === "Medio" ? "#e07b00" : "#14732b";
+              const rColor = p.nivel_riesgo === "Alto" ? "var(--alto)" : p.nivel_riesgo === "Medio" ? "var(--medio)" : "var(--bajo)";
               return (
                 <div key={p.id} className="card">
                   <strong>{p.alumno_nombre ?? "Alumno"}</strong><br />
@@ -2223,7 +2448,7 @@ export default function App() {
                   <span style={{ color: rColor, fontWeight: "bold" }}>{p.nivel_riesgo}</span>
                   {p.probabilidad != null && <> ({(p.probabilidad * 100).toFixed(1)}%)</>}<br />
                   <b>Indicador TDAH (modelo IA):</b>{" "}
-                  <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sospecha Baja" && p.nivel_tdah !== "Sin TDAH") ? "#d62828" : "#14732b", fontWeight: "bold" }}>
+                  <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sospecha Baja" && p.nivel_tdah !== "Sin TDAH") ? "var(--alto)" : "var(--bajo)", fontWeight: "bold" }}>
                     {tdahTexto(p.nivel_tdah)}
                   </span>
                   {p.confianza_tdah != null && (
@@ -2236,7 +2461,7 @@ export default function App() {
                     <><b>Prob. de TDAH (modelo):</b> {Math.round(p.prob_tdah * 100)}%<br /></>
                   )}
                   {p.referencia_psicometrica && (
-                    <small style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                    <small style={{ color: "var(--tinta-suave)", fontStyle: "italic" }}>
                       Referencia psicométrica (no decide): {p.referencia_psicometrica}<br />
                     </small>
                   )}
@@ -2246,7 +2471,7 @@ export default function App() {
                   {/* Botón SHAP */}
                   <div style={{ marginTop: 10 }}>
                     <button
-                      style={{ width: "auto", background: isShapOpen ? "#475569" : "#6366f1", padding: "6px 14px", fontSize: "0.82rem" }}
+                      style={{ width: "auto", background: isShapOpen ? "var(--superficie-2)" : "var(--marca)", padding: "6px 14px", fontSize: "0.82rem" }}
                       onClick={async () => {
                         if (isShapOpen) { setShapPredId(null); setShapData(null); return; }
                         setShapLoading(true); setShapPredId(p.id); setShapData(null);
@@ -2268,7 +2493,7 @@ export default function App() {
                   {isShapOpen && (
                     <div style={{ marginTop: 12, padding: "18px 20px", background: "var(--superficie-2)", borderRadius: 10, border: "1px solid var(--linea)" }}>
                       {shapLoading ? (
-                        <span style={{ color: "#64748b", fontSize: "0.88rem" }}>Generando explicación...</span>
+                        <span style={{ color: "var(--tinta-suave)", fontSize: "0.88rem" }}>Generando explicación...</span>
                       ) : (shapData?.tdah || shapData?.riesgo) ? (
                         <>
                           <p style={{ margin: "0 0 4px", fontWeight: 800, color: "var(--marca-oscura)", fontSize: "1rem" }}>
@@ -2276,13 +2501,13 @@ export default function App() {
                           </p>
                           <p style={{ margin: "0 0 16px", color: "var(--tinta-suave)", fontSize: "0.78rem" }}>
                             Cada barra muestra cuánto influyó cada factor.{" "}
-                            <span style={{ color: "#ef4444", fontWeight: 700 }}>● rojo = aumenta</span>{"  ·  "}
-                            <span style={{ color: "#22c55e", fontWeight: 700 }}>● verde = reduce</span>
+                            <span style={{ color: "var(--alto)", fontWeight: 700 }}>● rojo = aumenta</span>{"  ·  "}
+                            <span style={{ color: "var(--bajo)", fontWeight: 700 }}>● verde = reduce</span>
                           </p>
 
                           {shapData?.tdah && (
                             <div style={{ marginBottom: 16 }}>
-                              <p style={{ margin: "0 0 8px", fontWeight: 700, color: "#6366f1", fontSize: "0.88rem", borderLeft: "3px solid #6366f1", paddingLeft: 8 }}>
+                              <p style={{ margin: "0 0 8px", fontWeight: 700, color: "var(--marca)", fontSize: "0.88rem", borderLeft: "3px solid var(--marca)", paddingLeft: 8 }}>
                                 Indicador de TDAH — {shapData.tdah.nivel}
                               </p>
                               <ShapFactores features={shapData.tdah.features} />
@@ -2297,8 +2522,8 @@ export default function App() {
                           )}
 
                           {shapData?.riesgo && (
-                            <div style={{ borderTop: "1px dashed #cbd5e1", paddingTop: 14 }}>
-                              <p style={{ margin: "0 0 8px", fontWeight: 700, color: "#0ea5e9", fontSize: "0.88rem", borderLeft: "3px solid #0ea5e9", paddingLeft: 8 }}>
+                            <div style={{ borderTop: "1px dashed var(--tinta-media)", paddingTop: 14 }}>
+                              <p style={{ margin: "0 0 8px", fontWeight: 700, color: "var(--dato)", fontSize: "0.88rem", borderLeft: "3px solid var(--dato)", paddingLeft: 8 }}>
                                 Riesgo Académico — {shapData.riesgo.nivel}
                               </p>
                               <ShapFactores features={shapData.riesgo.features} />
@@ -2311,7 +2536,7 @@ export default function App() {
                           )}
                         </>
                       ) : (
-                        <span style={{ color: "#d62828", fontSize: "0.88rem" }}>No se pudo obtener la explicación.</span>
+                        <span style={{ color: "var(--alto)", fontSize: "0.88rem" }}>No se pudo obtener la explicación.</span>
                       )}
                     </div>
                   )}
@@ -2382,7 +2607,7 @@ export default function App() {
                       <div className="full" style={{ padding: "10px 14px", background: "var(--superficie-2)", borderRadius: 8, fontSize: "0.92rem" }}>
                         <b>Promedio del bimestre (vista previa):</b>{" "}
                         {prev ? <span style={{ fontWeight: 700, color: "var(--marca-oscura)" }}>{prev.letra}</span>
-                              : <span style={{ color: "#94a3b8" }}>sin notas ingresadas</span>}
+                              : <span style={{ color: "var(--tinta-suave)" }}>sin notas ingresadas</span>}
                       </div>
                     );
                   })()}
@@ -2429,7 +2654,7 @@ export default function App() {
                             <div key={b} className="card full">
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                                 <strong>Bimestre {b}</strong>
-                                <span>Promedio: <b style={{ color: "#1e3a5f" }}>{prom.letra}</b></span>
+                                <span>Promedio: <b style={{ color: "var(--tinta)" }}>{prom.letra}</b></span>
                               </div>
                               <table className="lista-table" style={{ width: "100%" }}>
                                 <thead><tr><th>Curso</th><th>Nota</th></tr></thead>
@@ -2460,7 +2685,7 @@ export default function App() {
         {activeView === "expediente" && (
           <article className="panel">
             <h2>Expediente Psicológico</h2>
-            <p style={{ color: "#64748b", marginTop: 0 }}>
+            <p style={{ color: "var(--tinta-suave)", marginTop: 0 }}>
               Genera y descarga el expediente del estudiante en PDF. Incluye el resumen del
               dashboard, la encuesta psicoeducativa (EDAH) y la predicción académica.
             </p>

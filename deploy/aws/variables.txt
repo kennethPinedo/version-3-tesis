@@ -8,8 +8,9 @@
 # Salida «EndpointBaseDatos» de la pila, con la clave que elegiste al crearla.
 DATABASE_URL=postgresql://tesisadmin:CLAVE@ENDPOINT.rds.amazonaws.com:5432/estudiantes
 
-# Salida «UrlAplicacion» de la pila (el dominio de CloudFront).
-CORS_ORIGINS=https://XXXXXXXX.cloudfront.net
+# Dos orígenes separados por coma: el dominio de CloudFront (salida
+# «UrlAplicacion») y el subdominio de la API que creaste en la fase 8.
+CORS_ORIGINS=https://XXXXXXXX.cloudfront.net,https://SUBDOMINIO.duckdns.org
 
 # LAS MISMAS que en Render y en tu .env local. Si migras los datos de Neon a
 # RDS con otras claves, los documentos de identidad quedan ilegibles.
@@ -21,5 +22,6 @@ CORS_ORIGIN_REGEX=
 
 # ── Al compilar el frontend (no va en la instancia) ─────────────────────────
 
-# Salida «UrlApi». SIN «/api» al final.
-VITE_API_URL=http://IP-DEL-SERVIDOR
+# El subdominio con certificado de la fase 8, SIN «/api» al final. No la IP:
+# el navegador bloquea que una página HTTPS llame a una API HTTP.
+VITE_API_URL=https://SUBDOMINIO.duckdns.org
