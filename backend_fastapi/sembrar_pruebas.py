@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sqlalchemy import text  # noqa: E402
 
-from database import SessionLocal, engine  # noqa: E402
+from database import Base, SessionLocal, engine  # noqa: E402
 from alumnos.models import Alumno, Asistencia, Encuesta, Nota  # noqa: E402
 from alumnos.routers.notas import ASIGNATURAS_VALIDAS  # noqa: E402
 from alumnos.services import cripto_service as cripto  # noqa: E402
@@ -200,6 +200,13 @@ def sembrar(cantidad: int, forzar: bool, acepto_produccion: bool) -> int:
             "repite con --acepto-produccion."
         )
         return 2
+
+    # Las tablas las crea main.py al arrancar la API, pero el seed no importa
+    # main: en una maquina recien clonada, sin haber levantado nunca el servidor,
+    # no existiria ninguna tabla y esto fallaria con un error de SQL que no dice
+    # que es lo que falta. create_all solo crea lo que no esta; no altera ni
+    # borra nada de lo que ya existe.
+    Base.metadata.create_all(bind=engine)
 
     db = SessionLocal()
     try:
