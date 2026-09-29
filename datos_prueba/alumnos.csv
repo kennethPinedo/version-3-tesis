@@ -1,0 +1,41 @@
+id,nombre,apellido,edad,nivel,grado,anio_cursada,genero,tipo_documento,numero_documento,contacto_emergente,inasistencias
+1,Ana,Huaman 01,12,Secundaria,1,2026,Masculino,DNI,99000000,Apoderado de prueba 900000000,1
+2,Luis,Ccahuana 02,11,Secundaria,1,2026,No especificado,DNI,99000001,Apoderado de prueba 900000000,3
+3,Rosa,Bustamante 03,12,Secundaria,1,2026,No especificado,DNI,99000002,Apoderado de prueba 900000000,13
+4,Carlos,Vargas 04,12,Secundaria,1,2026,Femenino,DNI,99000003,Apoderado de prueba 900000000,9
+5,Maria,Pariona 05,11,Secundaria,1,2026,Masculino,DNI,99000004,Apoderado de prueba 900000000,5
+6,Jorge,Nolasco 06,12,Secundaria,1,2026,Masculino,DNI,99000005,Apoderado de prueba 900000000,6
+7,Elena,Castro 07,12,Secundaria,1,2026,No especificado,DNI,99000006,Apoderado de prueba 900000000,8
+8,Miguel,Cordova 08,12,Secundaria,1,2026,No especificado,DNI,99000007,Apoderado de prueba 900000000,4
+9,Sofia,Yupanqui 09,11,Secundaria,1,2026,Masculino,DNI,99000008,Apoderado de prueba 900000000,3
+10,Diego,Flores 10,11,Secundaria,1,2026,No especificado,DNI,99000009,Apoderado de prueba 900000000,3
+11,Carmen,Lujan 11,12,Secundaria,1,2026,No especificado,DNI,99000010,Apoderado de prueba 900000000,4
+12,Andres,Quispe 12,12,Secundaria,1,2026,Masculino,DNI,99000011,Apoderado de prueba 900000000,3
+13,Lucia,Ramos 13,11,Secundaria,1,2026,Masculino,DNI,99000012,Apoderado de prueba 900000000,5
+14,Pedro,Ticona 14,12,Secundaria,1,2026,Masculino,DNI,99000013,Apoderado de prueba 900000000,2
+15,Julia,Rojas 15,12,Secundaria,1,2026,Masculino,DNI,99000014,Apoderado de prueba 900000000,18
+16,Raul,Chavez 16,11,Secundaria,1,2026,Femenino,DNI,99000015,Apoderado de prueba 900000000,2
+17,Paula,Zarate 17,12,Secundaria,1,2026,No especificado,DNI,99000016,Apoderado de prueba 900000000,3
+18,Victor,Mendoza 18,11,Secundaria,1,2026,No especificado,DNI,99000017,Apoderado de prueba 900000000,2
+19,Nora,Salazar 19,11,Secundaria,1,2026,No especificado,DNI,99000018,Apoderado de prueba 900000000,12
+20,Hugo,Ayala 20,11,Secundaria,1,2026,Femenino,DNI,99000019,Apoderado de prueba 900000000,3
+21,Ana,Huaman 21,11,Secundaria,1,2026,Femenino,DNI,99000020,Apoderado de prueba 900000000,15
+22,Luis,Ccahuana 22,11,Secundaria,1,2026,No especificado,DNI,99000021,Apoderado de prueba 900000000,6
+23,Rosa,Bustamante 23,11,Secundaria,1,2026,Femenino,DNI,99000022,Apoderado de prueba 900000000,8
+24,Carlos,Vargas 24,11,Secundaria,1,2026,Femenino,DNI,99000023,Apoderado de prueba 900000000,15
+25,Maria,Pariona 25,11,Secundaria,1,2026,Femenino,DNI,99000024,Apoderado de prueba 900000000,2
+26,Jorge,Nolasco 26,11,Secundaria,1,2026,No especificado,DNI,99000025,Apoderado de prueba 900000000,3
+27,Elena,Castro 27,12,Secundaria,1,2026,No especificado,DNI,99000026,Apoderado de prueba 900000000,7
+28,Miguel,Cordova 28,12,Secundaria,1,2026,Femenino,DNI,99000027,Apoderado de prueba 900000000,7
+29,Sofia,Yupanqui 29,12,Secundaria,1,2026,Femenino,DNI,99000028,Apoderado de prueba 900000000,3
+30,Diego,Flores 30,12,Secundaria,1,2026,Masculino,DNI,99000029,Apoderado de prueba 900000000,10
+31,Carmen,Lujan 31,12,Secundaria,1,2026,Masculino,DNI,99000030,Apoderado de prueba 900000000,6
+32,Andres,Quispe 32,11,Secundaria,1,2026,Masculino,DNI,99000031,Apoderado de prueba 900000000,2
+33,Lucia,Ramos 33,12,Secundaria,1,2026,Femenino,DNI,99000032,Apoderado de prueba 900000000,1
+34,Pedro,Ticona 34,11,Secundaria,1,2026,No especificado,DNI,99000033,Apoderado de prueba 900000000,6
+35,Julia,Rojas 35,12,Secundaria,1,2026,Masculino,DNI,99000034,Apoderado de prueba 900000000,10
+36,Raul,Chavez 36,11,Secundaria,1,2026,No especificado,DNI,99000035,Apoderado de prueba 900000000,4
+37,Paula,Zarate 37,11,Secundaria,1,2026,No especificado,DNI,99000036,Apoderado de prueba 900000000,5
+38,Victor,Mendoza 38,12,Secundaria,1,2026,No especificado,DNI,99000037,Apoderado de prueba 900000000,1
+39,Nora,Salazar 39,11,Secundaria,1,2026,Femenino,DNI,99000038,Apoderado de prueba 900000000,6
+40,Hugo,Ayala 40,11,Secundaria,1,2026,Masculino,DNI,99000039,Apoderado de prueba 900000000,6

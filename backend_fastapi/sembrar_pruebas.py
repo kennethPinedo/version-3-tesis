@@ -48,6 +48,7 @@ from sqlalchemy import text  # noqa: E402
 
 from database import SessionLocal, engine  # noqa: E402
 from alumnos.models import Alumno, Asistencia, Encuesta, Nota  # noqa: E402
+from alumnos.routers.notas import ASIGNATURAS_VALIDAS  # noqa: E402
 from alumnos.services import cripto_service as cripto  # noqa: E402
 from alumnos.services import generar_prediccion_alumno  # noqa: E402
 
@@ -77,7 +78,13 @@ GENEROS = ["Masculino", "Femenino", "No especificado"]
 
 # Areas nucleares. Se usan tres de las once del plan para que el promedio se
 # calcule sin generar 44 notas por estudiante.
-AREAS = ["Matematica", "Comunicacion", "Ciencia y Tecnologia"]
+#
+# Los nombres se toman del catalogo del sistema, con sus tildes. El seed escribe
+# por el ORM y no pasa por la validacion de la API, asi que escribir
+# «Matematica» colaria un area que el propio sistema rechaza: normalizar_asignatura
+# compara en minusculas pero no quita tildes, y esa nota quedaria fuera del plan
+# de estudios sin que nada avisara.
+AREAS = [ASIGNATURAS_VALIDAS[6], ASIGNATURAS_VALIDAS[4], ASIGNATURAS_VALIDAS[7]]
 
 # El dataset ordena los items como HI(5) + DA(5) + TC(10). Es el mismo orden que
 # usa prediccion_service al armar el vector, y cambiarlo aqui desplazaria las
@@ -111,6 +118,60 @@ def _dias_lectivos(cuantos: int, hasta: date, azar: random.Random) -> list[date]
     if not candidatas:
         return []
     return sorted(azar.sample(candidatas, min(cuantos, len(candidatas))))
+
+
+def generar(cantidad: int) -> list[dict]:
+    """Construye los estudiantes en memoria, sin tocar ninguna base.
+
+    Es la UNICA fuente: tanto sembrar() como exportar() consumen esta lista. Si
+    cada uno los construyera por su lado, bastaria con consumir el generador
+    aleatorio en distinto orden para que el CSV describiera a unos estudiantes y
+    la base contuviera otros, sin que nada lo delatase.
+    """
+    with DATASET.open(encoding="utf-8-sig", newline="") as f:
+        filas = list(csv.DictReader(f))
+
+    azar = random.Random(SEMILLA)
+    muestra = azar.sample(filas, min(cantidad, len(filas)))
+    hoy = date.today()
+    alumnos: list[dict] = []
+
+    for n, fila in enumerate(muestra):
+        ident = n + 1
+        edad = azar.choice([11, 12])
+        genero = azar.choice(GENEROS)
+        fechas = _dias_lectivos(int(float(fila.get("Inasistencias") or 0)), hoy, azar)
+
+        notas = []
+        for bim in (1, 2, 3, 4):
+            literal = str(fila[f"Nota_B{bim}"]).strip().upper()
+            if literal in ("AD", "A", "B", "C"):
+                for area in AREAS:
+                    notas.append({"bimestre": bim, "asignatura": area,
+                                  "calificacion": literal})
+
+        alumnos.append({
+            "id": ident,
+            "nombre": NOMBRES[n % len(NOMBRES)],
+            "apellido": f"{APELLIDOS[(n * 7 + 3) % len(APELLIDOS)]} {ident:02d}",
+            "edad": edad,
+            "nivel": "Secundaria",
+            "grado": 1,
+            "anio_cursada": hoy.year,
+            "genero": genero,
+            "tipo_documento": "DNI",
+            "numero_documento": str(DNI_BASE + n),
+            "contacto_emergente": MARCA,
+            # El total tiene que cuadrar con las fechas efectivamente generadas,
+            # no con la cifra del CSV: si el ano lectivo no daba para tantos dias
+            # lectivos, son menos. Es el numero que consume el modelo de riesgo.
+            "inasistencias": len(fechas),
+            "items": _mapear_items(fila),
+            "notas": notas,
+            "fechas_falta": [f.isoformat() for f in fechas],
+            "fecha_aplicacion": hoy.isoformat(),
+        })
+    return alumnos
 
 
 def _destino() -> str:
@@ -151,34 +212,22 @@ def sembrar(cantidad: int, forzar: bool, acepto_produccion: bool) -> int:
             )
             return 3
 
-        with DATASET.open(encoding="utf-8-sig", newline="") as f:
-            filas = list(csv.DictReader(f))
-
-        azar = random.Random(SEMILLA)
-        muestra = azar.sample(filas, min(cantidad, len(filas)))
-        anio = date.today().year
-        hoy = date.today()
         creados = 0
-
-        for n, fila in enumerate(muestra):
-            nombre = NOMBRES[n % len(NOMBRES)]
-            apellido = APELLIDOS[(n * 7 + 3) % len(APELLIDOS)]
-            numero = str(DNI_BASE + n)
-
-            nivel, grado_num = "Secundaria", 1
+        for datos in generar(cantidad):
+            numero = datos["numero_documento"]
             a = Alumno(
-                nombre=nombre,
-                apellido=f"{apellido} {n + 1:02d}",
-                edad=azar.choice([11, 12]),
-                nivel=nivel,
-                grado=f"{grado_num}° de {nivel}",
-                anio_cursada=anio,
-                contacto_emergente=MARCA,
-                genero=azar.choice(GENEROS),
-                tipo_documento="DNI",
+                nombre=datos["nombre"],
+                apellido=datos["apellido"],
+                edad=datos["edad"],
+                nivel=datos["nivel"],
+                grado=f"{datos['grado']}° de {datos['nivel']}",
+                anio_cursada=datos["anio_cursada"],
+                contacto_emergente=datos["contacto_emergente"],
+                genero=datos["genero"],
+                tipo_documento=datos["tipo_documento"],
                 documento_cifrado=cripto.cifrar(numero),
                 documento_huella=cripto.huella(numero),
-                inasistencias=0,
+                inasistencias=datos["inasistencias"],
                 inasistencias_previas=0,
             )
             db.add(a)
@@ -186,26 +235,16 @@ def sembrar(cantidad: int, forzar: bool, acepto_produccion: bool) -> int:
 
             db.add(Encuesta(
                 alumno_id=a.id, inasistencias=0, informante=None,
-                fecha_aplicacion=hoy, **_mapear_items(fila),
+                fecha_aplicacion=date.fromisoformat(datos["fecha_aplicacion"]),
+                **datos["items"],
             ))
-
-            for bim in (1, 2, 3, 4):
-                literal = str(fila[f"Nota_B{bim}"]).strip().upper()
-                if literal not in ("AD", "A", "B", "C"):
-                    continue
-                for area in AREAS:
-                    db.add(Nota(alumno_id=a.id, asignatura=area,
-                                calificacion_literal=literal, bimestre=bim))
-
-            faltas = int(float(fila.get("Inasistencias") or 0))
-            fechas = _dias_lectivos(faltas, hoy, azar)
-            for f in fechas:
-                db.add(Asistencia(alumno_id=a.id, fecha=f, estado="No asistió",
-                                  registrado_por="seed"))
-            # El total es lo que consume el modelo de riesgo, y tiene que cuadrar
-            # con las fechas que se acaban de sembrar, no con la cifra del CSV:
-            # si el ano lectivo no daba para tantos dias lectivos, son menos.
-            a.inasistencias = len(fechas)
+            for nota in datos["notas"]:
+                db.add(Nota(alumno_id=a.id, asignatura=nota["asignatura"],
+                            calificacion_literal=nota["calificacion"],
+                            bimestre=nota["bimestre"]))
+            for f in datos["fechas_falta"]:
+                db.add(Asistencia(alumno_id=a.id, fecha=date.fromisoformat(f),
+                                  estado="No asistió", registrado_por="seed"))
             creados += 1
 
         db.commit()
@@ -263,6 +302,50 @@ def limpiar() -> int:
         db.close()
 
 
+def exportar(cantidad: int, carpeta: Path) -> int:
+    """Escribe en CSV los estudiantes que sembraria, sin tocar ninguna base.
+
+    Sirve para poder revisarlos antes de cargarlos, y para que el juego de datos
+    de prueba sea visible en el repositorio en lugar de existir solo como una
+    consecuencia de ejecutar el script. Se genera desde aqui, no a mano, para que
+    los archivos no puedan contradecir a lo que el seed hace de verdad.
+    """
+    if not DATASET.exists():
+        print(f"No encuentro el dataset: {DATASET}")
+        return 1
+
+    alumnos, encuestas, notas, asistencias = [], [], [], []
+    for datos in generar(cantidad):
+        ident = datos["id"]
+        alumnos.append({k: datos[k] for k in (
+            "id", "nombre", "apellido", "edad", "nivel", "grado", "anio_cursada",
+            "genero", "tipo_documento", "numero_documento", "contacto_emergente",
+            "inasistencias")})
+        encuestas.append({"alumno_id": ident, **datos["items"],
+                          "fecha_aplicacion": datos["fecha_aplicacion"]})
+        for nota in datos["notas"]:
+            notas.append({"alumno_id": ident, **nota})
+        for f in datos["fechas_falta"]:
+            asistencias.append({"alumno_id": ident, "fecha": f,
+                                "estado": "No asistió"})
+
+    carpeta.mkdir(parents=True, exist_ok=True)
+    for nombre, filas_csv in (
+        ("alumnos.csv", alumnos), ("encuestas_edah.csv", encuestas),
+        ("notas.csv", notas), ("asistencias.csv", asistencias),
+    ):
+        destino = carpeta / nombre
+        with destino.open("w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(filas_csv[0].keys()))
+            w.writeheader()
+            w.writerows(filas_csv)
+        print(f"  {destino.name:20s} {len(filas_csv):4d} filas")
+
+    print(f"\nExportado a {carpeta}")
+    print("Son datos inventados: los DNI empiezan por 99, que no se emite en Peru.")
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -270,6 +353,9 @@ def main() -> int:
                    help="cuantos estudiantes sembrar (por omision 40)")
     p.add_argument("--limpiar", action="store_true",
                    help="retira solo los estudiantes que sembro este script")
+    p.add_argument("--exportar", metavar="CARPETA", nargs="?",
+                   const="../datos_prueba", default=None,
+                   help="escribe los estudiantes en CSV sin tocar ninguna base")
     p.add_argument("--forzar", action="store_true",
                    help="siembra aunque la base ya tenga estudiantes")
     p.add_argument("--acepto-produccion", action="store_true",
@@ -278,6 +364,8 @@ def main() -> int:
 
     if args.limpiar:
         return limpiar()
+    if args.exportar is not None:
+        return exportar(args.cantidad, Path(args.exportar))
     return sembrar(args.cantidad, args.forzar, args.acepto_produccion)
 
 
