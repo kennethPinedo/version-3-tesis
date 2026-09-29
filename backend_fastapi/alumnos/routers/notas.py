@@ -124,6 +124,11 @@ def create_nota(data: NotaCreate, db: Session = Depends(get_db)):
                      d["calificacion_literal"], d["bimestre"])
     db.commit()
     db.refresh(n)
+
+    # La carga masiva ya regeneraba; una nota suelta no, y cambia el promedio
+    # igual que cien. Esa asimetría dejaba predicciones calculadas con notas que
+    # ya no eran las vigentes.
+    regenerar_predicciones(db, [alumno_id])
     return _nota_dict(n)
 
 

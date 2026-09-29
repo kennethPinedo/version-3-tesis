@@ -218,3 +218,28 @@ class Asistencia(Base):
     __table_args__ = (
         UniqueConstraint("alumno_id", "fecha", name="uq_asistencia_alumno_fecha"),
     )
+
+
+class EdicionEncuesta(Base):
+    """Cada vez que se corrige una encuesta EDAH ya guardada.
+
+    La encuesta era inmutable: si habia un error, solo cabia aplicarla de nuevo.
+    Eso ensuciaba el historial —dos aplicaciones para un unico momento de
+    evaluacion— asi que ahora se puede corregir, pero con limite y con
+    constancia.
+
+    El limite existe porque el EDAH es un instrumento psicometrico: si se
+    pudiera reescribir sin restriccion, la puntuacion dejaria de reflejar lo que
+    observo el informante y pasaria a reflejar lo que alguien decidio despues.
+    Guardar la version anterior permite auditar que cambio y cuando.
+    """
+    __tablename__ = "ediciones_encuesta"
+
+    id = Column(Integer, primary_key=True, index=True)
+    encuesta_id = Column(Integer, ForeignKey("encuestas.id"), nullable=False, index=True)
+    fecha_edicion = Column(DateTime, default=datetime.utcnow, index=True)
+    editado_por = Column(String(50), nullable=True)
+    # Que cambio, en texto legible: «DA3: 1 -> 2 | TC7: 0 -> 1». Se guarda el
+    # resumen y no la encuesta entera para que el historial se pueda leer sin
+    # tener que comparar dos filas de 20 columnas.
+    resumen = Column(String, nullable=True)

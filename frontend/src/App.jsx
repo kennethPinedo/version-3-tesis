@@ -615,6 +615,12 @@ export default function App() {
   const [encuestaModo, setEncuestaModo] = useState("registrar");  // registrar | respuestas
   const [encuestaVerAlumno, setEncuestaVerAlumno] = useState("");
   const [encuestaRespuestas, setEncuestaRespuestas] = useState([]);
+  // Encuesta que se está corrigiendo, o null. La corrección ocurre en la
+  // propia tarjeta de «Ver Respuestas»: sacarla a otra pantalla obligaría a
+  // recordar de memoria los valores que se quieren cambiar.
+  const [encuestaEditando, setEncuestaEditando] = useState(null);
+  const [encuestaEditForm, setEncuestaEditForm] = useState(null);
+  const [encuestaEditGuardando, setEncuestaEditGuardando] = useState(false);
 
   const goToView = (v) => {
     // Control de acceso: el rol no puede navegar a vistas que no tiene permitidas.
@@ -936,6 +942,54 @@ export default function App() {
       setEncuestaStatus({ msg: "Encuesta guardada correctamente.", error: false });
     } catch (err) {
       setEncuestaStatus({ msg: err.message || "No se pudo guardar la encuesta.", error: true });
+    }
+  };
+
+  const recargarEncuestas = async () => {
+    if (!encuestaVerAlumno) return;
+    try { setEncuestaRespuestas(await req(`/encuestas/?alumno=${encuestaVerAlumno}`)); }
+    catch { /* el mensaje de error ya lo da quien llamó */ }
+  };
+
+  const abrirEdicion = (enc) => {
+    setEncuestaEditando(enc.id);
+    // Se parte de los valores actuales: corregir es ajustar lo que hay, no
+    // volver a responder los 20 ítems desde cero.
+    const f = { informante: enc.informante === "No consta" ? "Docente" : enc.informante };
+    encuestaKeys.forEach((k) => { f[k] = String(enc[k] ?? 0); });
+    setEncuestaEditForm(f);
+  };
+
+  const guardarEdicion = async (enc) => {
+    const body = { alumno: Number(encuestaVerAlumno), informante: encuestaEditForm.informante };
+    encuestaKeys.forEach((k) => { body[k] = Number(encuestaEditForm[k]); });
+
+    const cambiados = encuestaKeys.filter((k) => Number(enc[k] ?? 0) !== Number(encuestaEditForm[k]));
+    if (!await confirmar({
+      titulo: "¿Guardar la corrección de la encuesta?",
+      mensaje: `Te quedan ${enc.ediciones_restantes} corrección(es) este año. `
+             + "Queda constancia del cambio con su fecha, y la predicción del "
+             + "estudiante se recalcula.",
+      detalles: [
+        { etiqueta: "Ítems que cambian", valor: cambiados.length ? cambiados.join(", ") : "ninguno" },
+        { etiqueta: "Informante", valor: encuestaEditForm.informante, antes: enc.informante },
+      ],
+      tono: "aviso",
+      textoConfirmar: "Sí, corregir",
+    })) return;
+
+    setEncuestaEditGuardando(true);
+    try {
+      const r = await reqJson(`/encuestas/${enc.id}`, "PUT", body);
+      notify(r.mensaje);
+      setEncuestaEditando(null);
+      setEncuestaEditForm(null);
+      await recargarEncuestas();
+      await loadTodosPredicciones();
+    } catch (err) {
+      notify(err.message || "No se pudo corregir la encuesta.", true);
+    } finally {
+      setEncuestaEditGuardando(false);
     }
   };
 
@@ -2383,13 +2437,94 @@ export default function App() {
                         {idx === 0 && encuestaRespuestas.length > 1 && (
                           <span className="enc-vigente">La que usan las predicciones</span>
                         )}
+                        <span className="enc-espacio" />
+                        {/* El límite se enseña ANTES de pulsar: descubrir que no
+                            quedan correcciones después de rehacer los 20 ítems
+                            sería la peor forma de enterarse. */}
+                        {encuestaEditando === enc.id ? (
+                          <button type="button" className="lista-btn"
+                                  onClick={() => { setEncuestaEditando(null); setEncuestaEditForm(null); }}>
+                            Cancelar corrección
+                          </button>
+                        ) : enc.ediciones_restantes > 0 ? (
+                          <button type="button" className="lista-btn" onClick={() => abrirEdicion(enc)}>
+                            Corregir · quedan {enc.ediciones_restantes}
+                          </button>
+                        ) : (
+                          <span className="enc-sin-ediciones">
+                            Sin correcciones disponibles este año
+                          </span>
+                        )}
                       </div>
-                      {bloque("Déficit de Atención (DA)", encuestaKeysDA, 15)}
-                      {bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, 15)}
-                      {bloque("Trastorno de Conducta (TC)", encuestaKeysTC, 30)}
-                      <p style={{ margin: "8px 0 0", color: "var(--tinta-suave)", fontSize: "0.8rem" }}>
-                        Total EDAH: {suma(encuestaKeysDA) + suma(encuestaKeysHI) + suma(encuestaKeysTC)}/60
-                      </p>
+
+                      {encuestaEditando === enc.id && encuestaEditForm ? (
+                        <div className="enc-editor">
+                          <p className="form-legend">
+                            Ajusta solo lo que haya que corregir. Se guarda la fecha del
+                            cambio y qué ítems se modificaron.
+                          </p>
+                          <div className="field-group">
+                            <label htmlFor={`ed-inf-${enc.id}`}>¿Quién responde la escala?</label>
+                            <select id={`ed-inf-${enc.id}`} value={encuestaEditForm.informante}
+                                    onChange={(ev) => setEncuestaEditForm({ ...encuestaEditForm, informante: ev.target.value })}>
+                              {INFORMANTES.map((i) => <option key={i} value={i}>{i}</option>)}
+                            </select>
+                          </div>
+                          {[["Déficit de Atención (DA)", encuestaKeysDA],
+                            ["Hiperactividad e Impulsividad (HI)", encuestaKeysHI],
+                            ["Trastorno de Conducta (TC)", encuestaKeysTC]].map(([titulo, keys]) => (
+                            <div key={titulo} className="enc-editor-bloque">
+                              <h4 className="form-section__title">{titulo}</h4>
+                              <div className="grid encuesta-grid">
+                                {keys.map((k) => (
+                                  <div key={k} className="field-group">
+                                    <label htmlFor={`ed-${enc.id}-${k}`}>{k}</label>
+                                    <select id={`ed-${enc.id}-${k}`} value={encuestaEditForm[k]}
+                                            onChange={(ev) => setEncuestaEditForm({ ...encuestaEditForm, [k]: ev.target.value })}>
+                                      {encuestaEscalaOpciones.map((o) => (
+                                        <option key={o.value} value={o.value}>{o.label}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          <button type="button" onClick={() => guardarEdicion(enc)} disabled={encuestaEditGuardando}>
+                            {encuestaEditGuardando ? "Guardando…" : "Guardar corrección"}
+                          </button>
+                        </div>
+                      ) : (
+                        <>
+                          {bloque("Déficit de Atención (DA)", encuestaKeysDA, 15)}
+                          {bloque("Hiperactividad e Impulsividad (HI)", encuestaKeysHI, 15)}
+                          {bloque("Trastorno de Conducta (TC)", encuestaKeysTC, 30)}
+                          <p style={{ margin: "8px 0 0", color: "var(--tinta-suave)", fontSize: "0.8rem" }}>
+                            Total EDAH: {suma(encuestaKeysDA) + suma(encuestaKeysHI) + suma(encuestaKeysTC)}/60
+                          </p>
+                        </>
+                      )}
+
+                      {/* Historial de correcciones. Una puntuación que cambió sin
+                          dejar rastro no es auditable, y esto es un instrumento
+                          psicométrico sobre menores. */}
+                      {enc.ediciones?.length > 0 && (
+                        <div className="enc-historial">
+                          <h4 className="enc-historial-t">
+                            Correcciones realizadas ({enc.ediciones.length})
+                          </h4>
+                          <ul>
+                            {enc.ediciones.map((ed, i) => (
+                              <li key={i}>
+                                <span className="enc-hist-fecha">
+                                  {formatFecha(ed.fecha)} · {ed.editado_por}
+                                </span>
+                                <span className="enc-hist-cambio">{ed.resumen || "Sin detalle"}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

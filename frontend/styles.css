@@ -869,3 +869,38 @@ button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-of
   font-size: var(--t-lg);
 }
 .asist-total-fila--suma strong { color: var(--marca-oscura); font-weight: 800; }
+
+/* ── Corrección de una encuesta EDAH ──────────────────────────────────────── */
+.enc-espacio { flex: 1; }
+.enc-sin-ediciones { font-size: var(--t-sm); color: var(--tinta-suave); font-weight: 500; }
+
+.enc-editor {
+  background: var(--superficie-2);
+  border: 1px solid var(--marca-borde);
+  border-radius: var(--radio);
+  padding: var(--e4);
+  margin-top: var(--e3);
+}
+.enc-editor-bloque { margin-top: var(--e4); }
+.enc-editor button { width: auto; margin-top: var(--e4); }
+
+/* El historial es lo que hace auditable una puntuación corregida: sin él, un
+   valor cambiado sería indistinguible de uno original. */
+.enc-historial {
+  margin-top: var(--e4);
+  padding-top: var(--e3);
+  border-top: 1px solid var(--linea);
+}
+.enc-historial-t { margin: 0 0 var(--e2); font-size: var(--t-sm); color: var(--tinta-media); }
+.enc-historial ul { list-style: none; margin: 0; padding: 0; }
+.enc-historial li {
+  display: flex;
+  gap: var(--e4);
+  flex-wrap: wrap;
+  padding: var(--e2) 0;
+  border-bottom: 1px dashed var(--linea);
+  font-size: var(--t-sm);
+}
+.enc-historial li:last-child { border-bottom: none; }
+.enc-hist-fecha { color: var(--tinta-suave); white-space: nowrap; min-width: 22ch; }
+.enc-hist-cambio { color: var(--tinta-media); font-family: ui-monospace, monospace; font-size: var(--t-xs); }
