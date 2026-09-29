@@ -54,6 +54,7 @@ const encuestaLabels = {
 };
 
 const encuestaEscalaOpciones = [
+  { value: "", label: "— Selecciona —" },
   { value: "0", label: "0 - Nunca" },
   { value: "1", label: "1 - Algunas veces" },
   { value: "2", label: "2 - Bastantes veces" },
@@ -123,17 +124,6 @@ const NIVELES = { Primaria: [6], Secundaria: [1] };
 const GENEROS = ["Masculino", "Femenino", "Otro", "No especificado"];
 
 /**
- * Quién responde la escala EDAH.
- *
- * El EDAH no lo contesta el estudiante: lo rellena un adulto que lo observa a
- * diario. Un docente ve la conducta en clase y un familiar la ve en casa, así
- * que una misma puntuación no significa lo mismo según la fuente. El psicólogo
- * casi siempre transcribe lo que respondió otro; solo es informante cuando ha
- * observado directamente. Sin este dato la encuesta no es interpretable.
- */
-const INFORMANTES = ["Docente", "Padre/Madre/Apoderado", "Psicologo (observacion directa)"];
-
-/**
  * Indicador no cromático de cada nivel de riesgo.
  *
  * WCAG 1.4.1 no admite transmitir información solo con color, y aquí el motivo
@@ -169,10 +159,14 @@ const initialAlumno = {
   tipo_documento: "DNI", numero_documento: "",
 };
 
-// El informante por defecto es el docente: es quien aplica la escala en la
-// practica del centro. Aun asi es un desplegable, no un valor fijo.
+// Los ítems arrancan VACÍOS, no en 0.
+//
+// Con 0 precargado, un ítem sin responder queda indistinguible de un «Nunca»
+// elegido a conciencia: la encuesta se podría guardar entera sin que nadie la
+// hubiera contestado, y la puntuación resultante sería falsamente baja. Con el
+// campo vacío hay que pronunciarse sobre los 20.
 const initialEncuesta = Object.fromEntries([
-  ["alumno", ""], ["informante", "Docente"], ...encuestaKeys.map((k) => [k, "0"]),
+  ["alumno", ""], ...encuestaKeys.map((k) => [k, ""]),
 ]);
 const initialNota = { alumno: "", bimestre: "1" };
 
@@ -921,7 +915,24 @@ export default function App() {
   const submitEncuesta = async (e) => {
     e.preventDefault();
     setEncuestaStatus({ msg: "", error: false });
-    const body = { alumno: Number(encuestaForm.alumno), informante: encuestaForm.informante };
+
+    // Los 20 ítems son obligatorios. El navegador ya lo exige con `required`,
+    // pero se comprueba también aquí: así el mensaje nombra qué ítems faltan en
+    // lugar de limitarse a saltar al primero, que en un formulario de veinte
+    // campos obliga a buscarlos de uno en uno.
+    const faltan = encuestaKeys.filter((k) => encuestaForm[k] === "" || encuestaForm[k] == null);
+    if (faltan.length) {
+      setEncuestaStatus({
+        msg: `Faltan ${faltan.length} ítem(s) por responder: ${faltan.join(", ")}. `
+           + "La escala EDAH solo es interpretable completa: dejar uno en blanco "
+           + "produciría una puntuación falsamente baja.",
+        error: true,
+      });
+      document.getElementById(`encuesta-${faltan[0]}`)?.focus();
+      return;
+    }
+
+    const body = { alumno: Number(encuestaForm.alumno) };
     encuestaKeys.forEach((k) => { body[k] = Number(encuestaForm[k]); });
 
     const evaluado = alumnos.find((a) => String(a.id) === String(encuestaForm.alumno));
@@ -940,6 +951,9 @@ export default function App() {
     try {
       await req("/encuestas/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       setEncuestaStatus({ msg: "Encuesta guardada correctamente.", error: false });
+      // Se vacía: dejar los valores anteriores invitaría a guardar la siguiente
+      // encuesta con las respuestas del alumno anterior.
+      setEncuestaForm({ ...initialEncuesta });
     } catch (err) {
       setEncuestaStatus({ msg: err.message || "No se pudo guardar la encuesta.", error: true });
     }
@@ -955,13 +969,13 @@ export default function App() {
     setEncuestaEditando(enc.id);
     // Se parte de los valores actuales: corregir es ajustar lo que hay, no
     // volver a responder los 20 ítems desde cero.
-    const f = { informante: enc.informante === "No consta" ? "Docente" : enc.informante };
+    const f = {};
     encuestaKeys.forEach((k) => { f[k] = String(enc[k] ?? 0); });
     setEncuestaEditForm(f);
   };
 
   const guardarEdicion = async (enc) => {
-    const body = { alumno: Number(encuestaVerAlumno), informante: encuestaEditForm.informante };
+    const body = { alumno: Number(encuestaVerAlumno) };
     encuestaKeys.forEach((k) => { body[k] = Number(encuestaEditForm[k]); });
 
     const cambiados = encuestaKeys.filter((k) => Number(enc[k] ?? 0) !== Number(encuestaEditForm[k]));
@@ -972,7 +986,6 @@ export default function App() {
              + "estudiante se recalcula.",
       detalles: [
         { etiqueta: "Ítems que cambian", valor: cambiados.length ? cambiados.join(", ") : "ninguno" },
-        { etiqueta: "Informante", valor: encuestaEditForm.informante, antes: enc.informante },
       ],
       tono: "aviso",
       textoConfirmar: "Sí, corregir",
@@ -2330,18 +2343,6 @@ export default function App() {
                     {alumnoOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                 </div>
-                <div className="field-group full">
-                  <label htmlFor="encuesta-informante">¿Quién responde la escala?</label>
-                  <select id="encuesta-informante" value={encuestaForm.informante}
-                          onChange={(e) => setEncuestaForm({ ...encuestaForm, informante: e.target.value })} required>
-                    {INFORMANTES.map((i) => <option key={i} value={i}>{i}</option>)}
-                  </select>
-                  <p className="form-legend">
-                    La escala la responde quien observa al estudiante a diario, no él mismo.
-                    Quién sea cambia cómo se lee el resultado: la conducta en clase y la
-                    conducta en casa no son lo mismo.
-                  </p>
-                </div>
                 <div className="form-section full encuesta-bloque">
                   <h3 className="form-section__title">Déficit de Atención (DA1-DA5)</h3>
                   <p className="form-legend">{encuestaLeyendaAtencion}</p>
@@ -2349,7 +2350,10 @@ export default function App() {
                     {encuestaKeysDA.map((k) => (
                       <div key={k} className="field-group">
                         <label htmlFor={`encuesta-${k}`}>{k}: {encuestaLabels[k]}</label>
-                        <select id={`encuesta-${k}`} value={encuestaForm[k]} onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}>
+                        <select id={`encuesta-${k}`} value={encuestaForm[k]}
+                                  onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}
+                                  className={encuestaForm[k] === "" ? "sin-responder" : ""}
+                                  required>
                           {encuestaEscalaOpciones.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                         </select>
                       </div>
@@ -2362,7 +2366,10 @@ export default function App() {
                     {encuestaKeysHI.map((k) => (
                       <div key={k} className="field-group">
                         <label htmlFor={`encuesta-${k}`}>{k}: {encuestaLabels[k]}</label>
-                        <select id={`encuesta-${k}`} value={encuestaForm[k]} onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}>
+                        <select id={`encuesta-${k}`} value={encuestaForm[k]}
+                                  onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}
+                                  className={encuestaForm[k] === "" ? "sin-responder" : ""}
+                                  required>
                           {encuestaEscalaOpciones.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                         </select>
                       </div>
@@ -2375,7 +2382,10 @@ export default function App() {
                     {encuestaKeysTC.map((k) => (
                       <div key={k} className="field-group">
                         <label htmlFor={`encuesta-${k}`}>{k}: {encuestaLabels[k]}</label>
-                        <select id={`encuesta-${k}`} value={encuestaForm[k]} onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}>
+                        <select id={`encuesta-${k}`} value={encuestaForm[k]}
+                                  onChange={(e) => setEncuestaForm({ ...encuestaForm, [k]: e.target.value })}
+                                  className={encuestaForm[k] === "" ? "sin-responder" : ""}
+                                  required>
                           {encuestaEscalaOpciones.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                         </select>
                       </div>
@@ -2429,9 +2439,6 @@ export default function App() {
                     <div key={enc.id} className="card full" style={{ marginTop: 12 }}>
                       <div className="enc-cab">
                         <span>📅 {formatFecha(enc.fecha_aplicacion)}</span>
-                        {/* Quién respondió: una misma puntuación no se lee igual según se
-                            observe la conducta en clase o la conducta en casa. */}
-                        <span className="enc-informante">Informante: {enc.informante ?? "No consta"}</span>
                         {/* La lista llega ordenada de más reciente a más antigua, así que
                             la primera es la que alimenta las predicciones. */}
                         {idx === 0 && encuestaRespuestas.length > 1 && (
@@ -2463,13 +2470,6 @@ export default function App() {
                             Ajusta solo lo que haya que corregir. Se guarda la fecha del
                             cambio y qué ítems se modificaron.
                           </p>
-                          <div className="field-group">
-                            <label htmlFor={`ed-inf-${enc.id}`}>¿Quién responde la escala?</label>
-                            <select id={`ed-inf-${enc.id}`} value={encuestaEditForm.informante}
-                                    onChange={(ev) => setEncuestaEditForm({ ...encuestaEditForm, informante: ev.target.value })}>
-                              {INFORMANTES.map((i) => <option key={i} value={i}>{i}</option>)}
-                            </select>
-                          </div>
                           {[["Déficit de Atención (DA)", encuestaKeysDA],
                             ["Hiperactividad e Impulsividad (HI)", encuestaKeysHI],
                             ["Trastorno de Conducta (TC)", encuestaKeysTC]].map(([titulo, keys]) => (
@@ -2481,7 +2481,10 @@ export default function App() {
                                     <label htmlFor={`ed-${enc.id}-${k}`}>{k}</label>
                                     <select id={`ed-${enc.id}-${k}`} value={encuestaEditForm[k]}
                                             onChange={(ev) => setEncuestaEditForm({ ...encuestaEditForm, [k]: ev.target.value })}>
-                                      {encuestaEscalaOpciones.map((o) => (
+                                      {/* Sin la opción vacía: aquí se corrige un
+                                          valor existente, y dejarlo en blanco no
+                                          significaría nada. */}
+                                      {encuestaEscalaOpciones.filter((o) => o.value !== "").map((o) => (
                                         <option key={o.value} value={o.value}>{o.label}</option>
                                       ))}
                                     </select>

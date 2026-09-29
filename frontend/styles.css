@@ -827,7 +827,6 @@ button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-of
   color: var(--tinta-suave);
   font-weight: 600;
 }
-.enc-informante { font-weight: 500; color: var(--tinta-media); font-size: var(--t-sm); }
 .enc-vigente {
   background: var(--marca-suave);
   color: var(--marca-oscura);
@@ -904,3 +903,15 @@ button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-of
 .enc-historial li:last-child { border-bottom: none; }
 .enc-hist-fecha { color: var(--tinta-suave); white-space: nowrap; min-width: 22ch; }
 .enc-hist-cambio { color: var(--tinta-media); font-family: ui-monospace, monospace; font-size: var(--t-xs); }
+
+/* Ítem de la escala EDAH todavía sin responder.
+   El borde no es solo decoración: en un formulario de veinte campos hay que
+   poder ver de un vistazo cuáles faltan, sin recorrerlos uno a uno. Se
+   acompaña del texto «— Selecciona —» dentro del propio campo, para que no
+   dependa de distinguir el color. */
+select.sin-responder {
+  border-color: var(--medio);
+  border-width: 2px;
+  background-color: var(--medio-suave);
+}
+select.sin-responder:focus-visible { border-color: var(--marca-fuerte); }

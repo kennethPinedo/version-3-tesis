@@ -21,10 +21,10 @@ _ALL_KEYS = _KEYS_DA + _KEYS_HI + _KEYS_TC
 # Escala EDAH: 0 = Nunca, 1 = Algunas veces, 2 = Bastantes veces, 3 = Siempre.
 _Item = Field(ge=0, le=3)
 
-# Quien responde la escala. El EDAH no lo contesta el nino: lo rellena un adulto
-# que lo observa a diario, y la lectura clinica cambia segun cual sea. El
-# psicologo casi nunca es el informante: normalmente transcribe lo que respondio
-# el docente o la familia, y esa distincion tiene que quedar registrada.
+# El informante se retiro de la interfaz: solo el psicologo tiene acceso a esta
+# pantalla, asi que preguntarlo era un campo que nadie iba a variar. La columna
+# se conserva —las 35 encuestas previas ya decian «No consta»— y la API sigue
+# aceptandolo por si alguna vez vuelve a registrarse, pero ya no se exige.
 INFORMANTES = ("Docente", "Padre/Madre/Apoderado", "Psicologo (observacion directa)")
 
 
@@ -36,7 +36,9 @@ class EncuestaCreate(BaseModel):
     forman parte de este instrumento psicométrico.
     """
     alumno: int
-    informante: str = Field(default="Docente")
+    # Opcional: la interfaz ya no lo pide. Si llega, se valida; si no, queda nulo
+    # y se muestra como «No consta», igual que las encuestas anteriores.
+    informante: Optional[str] = Field(default=None)
     DA1: int = _Item; DA2: int = _Item; DA3: int = _Item; DA4: int = _Item; DA5: int = _Item
     HI1: int = _Item; HI2: int = _Item; HI3: int = _Item; HI4: int = _Item; HI5: int = _Item
     TC1: int = _Item; TC2: int = _Item; TC3: int = _Item; TC4: int = _Item; TC5: int = _Item
@@ -45,8 +47,10 @@ class EncuestaCreate(BaseModel):
 
     @field_validator("informante")
     @classmethod
-    def _informante_valido(cls, v: str) -> str:
-        limpio = (v or "").strip()
+    def _informante_valido(cls, v):
+        if v is None:
+            return None
+        limpio = v.strip()
         if limpio not in INFORMANTES:
             raise ValueError(f"El informante debe ser uno de: {', '.join(INFORMANTES)}.")
         return limpio
@@ -171,7 +175,10 @@ def _resumir_cambios(anterior: dict, nuevo: dict) -> str:
         for k in _ALL_KEYS
         if anterior.get(k) != nuevo.get(k)
     ]
-    if anterior.get("informante") != nuevo.get("informante"):
+    # El informante solo se contrasta si la correccion lo trae. La interfaz ya no
+    # lo envia, y comparar contra None convertiria cada correccion de un item en
+    # un «Informante: Docente -> None» que nadie pidio.
+    if nuevo.get("informante") is not None and anterior.get("informante") != nuevo.get("informante"):
         partes.append(f"Informante: {anterior.get('informante')} -> {nuevo.get('informante')}")
     return " | ".join(partes)
 
@@ -224,7 +231,10 @@ def editar_encuesta(
 
     for k in _ALL_KEYS:
         setattr(e, k, d[k])
-    e.informante = d["informante"]
+    # Si la correccion no trae informante —el caso normal desde que se retiro de
+    # la pantalla— se conserva el que ya estuviera guardado en lugar de anularlo.
+    if d["informante"] is not None:
+        e.informante = d["informante"]
 
     usuario = None
     try:
