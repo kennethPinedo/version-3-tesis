@@ -172,7 +172,27 @@ const initialNota = { alumno: "", bimestre: "1" };
 
 /* ── Chart & dashboard helpers ─────────────────────────────────────────── */
 
-const FACTOR_COLORS = ["var(--marca-fuerte)", "var(--bajo)", "var(--dato)", "var(--medio)", "var(--alto)", "var(--bajo)"];
+/**
+ * Color de cada factor del gráfico de influencia, POR NOMBRE.
+ *
+ * Antes era una lista indexada por posición, y buildFactoresData ordena las
+ * barras de mayor a menor: el mismo factor cambiaba de color según su ranking,
+ * así que el color no significaba nada y en dos alumnos distintos «Inatención»
+ * salía de dos colores.
+ *
+ * Las dos subescalas EDAH comparten el índigo a propósito: desacopla la
+ * psicometría del rendimiento académico, que el modelo trata como variables
+ * separadas. Comparten tono porque son el mismo tipo de medida; cuál es cuál lo
+ * dice la etiqueta del eje, no el color.
+ */
+const FACTOR_COLORS = {
+  "Inatención": "var(--edah-graf)",
+  "Hiperactividad": "var(--edah-graf)",
+  "Conducta": "var(--edah-graf)",
+  "Rend. Académico": "var(--serie-1)",
+  "Inasistencias": "var(--serie-4)",
+};
+const colorFactor = (nombre) => FACTOR_COLORS[nombre] ?? "var(--tinta-suave)";
 
 function buildAcadPieData(nivelRiesgo, probabilidad) {
   // Dona invertida (medidor de seguridad): el verde ("Bajo") es la parte SIN
@@ -243,7 +263,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     return `<table class="shap">${features.map((f) => {
       const pct = Math.max(Math.round((Math.abs(f.shap) / maxAbs) * 100), 4);
       const up = f.shap > 0;
-      const color = up ? "#ef4444" : "#22c55e";
+      const color = up ? "#ef4444" : "#059669";
       return `<tr>
         <td class="shap-name">${esc(f.label)} <span class="muted">(${esc(f.value_fmt)})</span></td>
         <td class="shap-bar"><span class="sbar" style="width:${pct}%;background:${color}"></span></td>
@@ -340,7 +360,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
         <tr><td class="k">Fecha de predicción</td><td>${esc(formatFecha(pred.fecha_prediccion))}</td></tr>
       </table>
       <h3>Explicabilidad del modelo (SHAP)</h3>
-      <p class="shap-legend"><span class="dot up"></span> rojo = el factor <b>aumenta</b> el indicador &nbsp;·&nbsp; <span class="dot down"></span> verde = el factor lo <b>reduce</b></p>
+      <p class="shap-legend"><span class="dot up"></span> &uarr; el factor <b>aumenta</b> el indicador &nbsp;·&nbsp; <span class="dot down"></span> &darr; el factor lo <b>reduce</b></p>
       <h4 class="shap-h tdah">Indicador de TDAH — ${esc(tdahTexto(shap?.nivel ?? pred.nivel_tdah))}</h4>
       ${shapBarsHTML(shap?.features)}
       <h4 class="shap-h riesgo">Riesgo Académico — ${esc(shapRiesgo?.nivel ?? pred.nivel_riesgo ?? "—")}</h4>
@@ -405,7 +425,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     .interp p { margin: 0 0 8px; text-align: justify; }
     .shap-legend { font-size: 11px; color: #64748b; margin: 0 0 10px; }
     .shap-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 2px; }
-    .shap-legend .dot.up { background: #ef4444; } .shap-legend .dot.down { background: #22c55e; }
+    .shap-legend .dot.up { background: #ef4444; } .shap-legend .dot.down { background: #059669; }
     h4.shap-h { font-size: 12px; margin: 12px 0 6px; padding-left: 8px; }
     h4.shap-h.tdah { color: #6366f1; border-left: 3px solid #6366f1; }
     h4.shap-h.riesgo { color: #0ea5e9; border-left: 3px solid #0ea5e9; }
@@ -503,16 +523,23 @@ function ShapFactores({ features }) {
       {features.map((f) => {
         const pct = Math.max(Math.round((Math.abs(f.shap) / maxAbs) * 100), 4);
         const up = f.shap > 0;
-        const color = up ? "var(--alto)" : "var(--bajo)";
+        // Dos tonos por dirección, y no es redundante: el relleno es un gráfico
+        // (WCAG 1.4.11 pide 3:1) y la etiqueta es texto (1.4.3 pide 4.5:1). Un
+        // solo tono no cumple los dos umbrales a la vez sobre superficie blanca.
+        const barra = up ? "var(--alto-graf)" : "var(--bajo-graf)";
+        const texto = up ? "var(--alto)" : "var(--bajo)";
         return (
           <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10, margin: "7px 0" }}>
             <div style={{ width: 210, flexShrink: 0, fontSize: "0.82rem", color: "var(--tinta-media)" }}>
               {f.label} <span style={{ color: "var(--tinta-suave)", fontWeight: 600 }}>({f.value_fmt})</span>
             </div>
             <div style={{ flex: 1, background: "var(--superficie-2)", borderRadius: 7, height: 20, overflow: "hidden" }}>
-              <div style={{ width: `${pct}%`, background: color, height: "100%", borderRadius: 7, transition: "width .4s ease" }} />
+              <div style={{ width: `${pct}%`, background: barra, height: "100%", borderRadius: 7, transition: "width .4s ease" }} />
             </div>
-            <div style={{ width: 140, flexShrink: 0, fontSize: "0.78rem", color, fontWeight: 700, textAlign: "right" }}>
+            {/* f.direccion ya llega del backend como «↑ Aumenta TDAH» o
+                «↓ Reduce TDAH»: la flecha y la palabra son las que codifican la
+                dirección, el color solo la refuerza (WCAG 1.4.1). */}
+            <div style={{ width: 140, flexShrink: 0, fontSize: "0.78rem", color: texto, fontWeight: 700, textAlign: "right" }}>
               {f.direccion}
             </div>
           </div>
@@ -1650,11 +1677,13 @@ export default function App() {
                           <YAxis type="category" dataKey="name" width={124} tickLine={false}
                                  tick={{ fontSize: 12, fill: "var(--tinta-media)" }}
                                  axisLine={{ stroke: "var(--linea)" }} />
-                          <Tooltip formatter={(v) => `${v}%`} cursor={{ fill: "rgba(255,255,255,.04)" }} contentStyle={{ background: "var(--superficie-2)", border: "1px solid var(--linea-fuerte)", borderRadius: 8, color: "var(--tinta)" }} />
+                          {/* El velo del cursor es oscuro: era blanco al 4%, que
+                              sobre una superficie blanca no se ve. */}
+                          <Tooltip formatter={(v) => `${v}%`} cursor={{ fill: "rgba(15,23,42,.05)" }} contentStyle={{ background: "var(--superficie)", border: "1px solid var(--linea-fuerte)", borderRadius: 8, color: "var(--tinta)" }} />
                           <Bar dataKey="valor" radius={[0, 6, 6, 0]}
                                label={{ position: "right", formatter: (v) => `${v}%`, fontSize: 12, fill: "var(--tinta-media)" }}>
-                            {factoresData.map((_, i) => (
-                              <Cell key={i} fill={FACTOR_COLORS[i % FACTOR_COLORS.length]} />
+                            {factoresData.map((f) => (
+                              <Cell key={f.name} fill={colorFactor(f.name)} />
                             ))}
                           </Bar>
                         </BarChart>

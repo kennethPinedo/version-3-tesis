@@ -11,47 +11,89 @@
 
 :root {
   /* ── Color ───────────────────────────────────────────────────────────
-     Tema oscuro. Se mantiene la separación de responsabilidades: el acento
-     (violeta) navega y acciona; la escala semántica describe resultados
-     clínicos y no se usa nunca para navegación.
-     Todos los pares texto/fondo se eligieron con contraste >= 4.5:1 sobre la
-     superficie donde aparecen (WCAG 2.1 AA). */
-  --marca:        #8b5cf6;   /* acento: fondos de botón y estado activo */
-  --marca-fuerte: #a78bfa;   /* 6.4:1 sobre superficie — enlaces y texto */
-  --marca-oscura: #c4b5fd;   /* 9.1:1 — titulares */
-  --marca-suave:  #2a2440;   /* relleno tenue del elemento activo */
-  --marca-borde:  #453a6b;
+     Tema claro institucional. Distribución cromática 60-30-10:
+       60%  base neutra fría — superficie de lectura, previene fatiga visual
+       30%  azul institucional — navega y acciona
+       10%  escala semántica — describe resultados clínicos, nunca navega
+     Esa separación de responsabilidades es la que permite que un color
+     signifique siempre lo mismo: el azul jamás informa de un riesgo y el
+     ámbar jamás es un botón.
 
-  /* Escala de riesgo. Contrastes MEDIDOS sobre --superficie, no estimados.
-     El nivel bajo era verde (#34d399) y se cambió a cian: con deuteranopia
-     —la daltonía más común, ~6% de los varones— el verde y el ámbar se
-     volvían el mismo color (separación RGB 52, hace falta >100). Con cian
-     sube a 100. Rojo y ámbar se conservan: ya se distinguían.
-     Aun así el color NUNCA es el único indicador: cada nivel lleva icono y
-     texto, porque WCAG 1.4.1 no admite codificar solo por color. */
-  --alto:         #f87171;   /* 5.6:1 — riesgo alto */
-  --alto-suave:   #33222a;
-  --medio:        #fbbf24;   /* 9.2:1 — riesgo medio */
-  --medio-suave:  #332a1a;
-  --bajo:         #22d3ee;   /* 8.5:1 — riesgo bajo */
-  --bajo-suave:   #142c33;
+     Todos los contrastes están MEDIDOS sobre la superficie donde el color
+     aparece de verdad, no estimados (WCAG 2.1 AA: 4.5:1 en texto, 3:1 en
+     gráficos y bordes de control).
 
-  /* Azul informativo: ni marca ni riesgo. Existe porque App.jsx tenía azules
-     incrustados a mano (#2563eb, #0093c4) que sobre fondo oscuro daban 2.6:1
-     y quedaban ilegibles. */
-  --dato:         #60a5fa;   /* 6.0:1 sobre superficie */
-  --dato-suave:   #1a2740;
+     Dos escalas por nivel, y la razón importa: App.jsx pinta el nivel de
+     riesgo como TEXTO —`style={{ color: RIESGO_COLORS[nivel] }}`— y también
+     como relleno de gráfico. El umbral no es el mismo (4.5:1 frente a 3:1),
+     así que un solo tono no puede servir para los dos sitios sin fallar en
+     uno. Los tonos -700 son para texto; los `-graf` para rellenos. */
 
-  /* Neutros fríos, escalonados para que las superficies se distingan sin
-     depender de sombras, que apenas se ven sobre fondo oscuro. */
-  --fondo:        #16181c;
-  --superficie:   #22252a;
-  --superficie-2: #2a2e34;
-  --tinta:        #e9ecf1;
-  --tinta-media:  #b8c0cc;   /* 9.3:1 — texto secundario */
-  --tinta-suave:  #98a1ad;   /* 6.2:1 — texto de apoyo */
-  --linea:        #32373f;
-  --linea-fuerte: #434a54;
+  /* ── 30% · Azul institucional ─────────────────────────────────────── */
+  --marca:        #0284c7;   /* 4.10:1 — fondo de botón y estado activo */
+  --marca-fuerte: #0369a1;   /* 5.93:1 — enlaces, texto y hover del botón */
+  --marca-oscura: #075985;   /* 7.56:1 — titulares */
+  --marca-activa: #0c4a6e;   /* 9.4:1 — boton pulsado */
+  --marca-suave:  #f0f9ff;   /* relleno del elemento activo y chips */
+  --marca-borde:  #bae6fd;
+
+  /* ── 10% · Escala de riesgo ────────────────────────────────────────
+     Enfoque no punitivo: el nivel alto es coral, no rojo saturado. Un
+     #ff0000 sobre el expediente de un niño de 11 años lee como castigo, y
+     lo que describe es una necesidad de apoyo.
+
+     El color NUNCA es el único indicador: cada nivel lleva icono y etiqueta
+     textual, porque WCAG 1.4.1 no admite codificar solo por color. Hace
+     falta además porque con deuteranopia —la daltonía más común— el ámbar y
+     el coral quedan a separación 35 cuando hacen falta 100: son
+     indistinguibles entre sí por tono, y es el icono el que los separa. */
+  --alto:         #b91c1c;   /* 6.47:1 — texto «Riesgo Alto» */
+  --alto-graf:    #ef4444;   /* 3.76:1 — relleno de gráfico */
+  --alto-suave:   #fef2f2;   /* fondo de badge */
+  --alto-borde:   #fecaca;
+  --medio:        #b45309;   /* 5.02:1 — texto «Riesgo Medio» */
+  --medio-graf:   #d97706;   /* 3.19:1 */
+  --medio-suave:  #fffbeb;
+  --medio-borde:  #fde68a;
+  --bajo:         #047857;   /* 5.48:1 — texto «Riesgo Bajo» */
+  --bajo-graf:    #059669;   /* 3.77:1 */
+  --bajo-suave:   #ecfdf5;
+  --bajo-borde:   #a7f3d0;
+
+  /* Índigo para la psicometría EDAH (inatención, hiperactividad, conducta).
+     Existe para desacoplar conceptualmente la escala clínica de las notas
+     académicas: si el EDAH se pintara con los mismos tonos que el
+     rendimiento, el lector sumaría dos cosas que el modelo trata por
+     separado. */
+  --edah:         #4f46e5;   /* 6.29:1 — texto */
+  --edah-graf:    #6366f1;   /* 4.47:1 — relleno */
+  --edah-suave:   #eef2ff;
+  --edah-borde:   #c7d2fe;
+
+  /* Azul informativo: ni marca ni riesgo. Se distingue del institucional
+     para que un dato neutro no se confunda con algo accionable. */
+  --dato:         #1d4ed8;   /* 6.70:1 */
+  --dato-suave:   #eff6ff;
+
+  /* ── 60% · Base neutra ─────────────────────────────────────────────
+     Gris frío. El fondo no es blanco puro: sobre una superficie blanca las
+     tarjetas blancas no se distinguirían del lienzo. */
+  --fondo:        #f8fafc;
+  --superficie:   #ffffff;   /* tarjetas, modales y tablas */
+  --superficie-2: #f1f5f9;   /* cabeceras de tabla y rellenos de apoyo */
+  --tinta:        #0f172a;   /* 17.85:1 — texto principal y titulares */
+  --tinta-media:  #475569;   /* 7.58:1 — texto secundario y etiquetas */
+  /* Texto de apoyo. No es slate-500 exacto: ese da 4.76:1 sobre blanco pero
+     baja a 4.34:1 sobre --superficie-2, y ahí es donde se usa de verdad (pies
+     de tabla y leyendas, que van sobre el gris de apoyo). Oscurecerlo un paso
+     lo deja en 4.65:1 en la peor de las tres superficies. */
+  --tinta-suave:  #616f86;   /* 5.09:1 sobre blanco · 4.65:1 sobre apoyo */
+  --linea:        #e2e8f0;   /* divisor decorativo: no delimita controles */
+  /* Borde de lo interactivo. Separado de --linea a propósito: slate-200 da
+     1.23:1 y slate-400 solo 2.56:1, así que ninguno de los dos delimita un
+     campo de formulario sin incumplir WCAG 1.4.11, que exige 3:1 en los
+     límites de un componente de interfaz. */
+  --linea-fuerte: #64748b;   /* 4.76:1 — bordes de input, select y botón */
 
   /* ── Escala tipográfica (proporción 1.2) ─────────────────────────── */
   --t-xs:  0.75rem;   /* 12px — mínimo absoluto, solo etiquetas */
@@ -70,26 +112,31 @@
   --radio-sm: 7px;
   --radio-lg: 14px;
 
-  /* En oscuro la sombra no separa superficies: el trabajo lo hace el borde. */
-  --sombra:    0 1px 2px rgba(0, 0, 0, 0.32);
-  --sombra-md: 0 6px 20px rgba(0, 0, 0, 0.40);
-  --sombra-lg: 0 18px 44px rgba(0, 0, 0, 0.55);
+  /* En claro la sombra sí separa superficies, así que vuelve a hacer el
+     trabajo que en oscuro recaía en el borde. Son tenues y de tinte frío:
+     un negro puro sobre gris frío se ve sucio. */
+  --sombra:    0 1px 2px rgba(15, 23, 42, 0.06);
+  --sombra-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --sombra-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
 
   /* Altura mínima de los controles: supera con holgura el mínimo de 24px
      que exige WCAG 2.5.8 y se acerca al objetivo cómodo de 44px. */
   --control: 42px;
   --control-sm: 34px;
 
-  /* Paleta de series para los gráficos, tomada del tema de referencia. */
-  --serie-1: #a78bfa;
-  --serie-2: #34d399;
-  --serie-3: #60a5fa;
-  --serie-4: #fbbf24;
-  --serie-5: #f87171;
-  --serie-6: #f472b6;   /* era cian, que ahora es el «riesgo bajo»: un mismo
-                           color no puede significar dos cosas en la interfaz */
+  /* Paleta de series para los gráficos. Todas pasan el 3:1 que WCAG 1.4.11
+     exige a un elemento gráfico portador de información, medido sobre la
+     superficie blanca en la que se dibujan. */
+  --serie-1: #0284c7;   /* 4.10:1 */
+  --serie-2: #059669;   /* 3.77:1 */
+  --serie-3: #6366f1;   /* 4.47:1 */
+  --serie-4: #d97706;   /* 3.19:1 */
+  --serie-5: #ef4444;   /* 3.76:1 */
+  --serie-6: #c026d3;   /* 4.71:1 — fucsia, que no colisiona con ningún
+                           nivel de riesgo: un mismo color no puede
+                           significar dos cosas en la interfaz */
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -150,15 +197,19 @@ body {
    es un fondo digno por sí mismo y no una caja rota. */
 .auth-foto {
   position: relative;
-  background-color: #1a1430;
+  /* Este panel se queda OSCURO aunque el resto del tema sea claro, y no es un
+     olvido: el texto va en blanco sobre el velo, y aclararlo dejaria texto
+     blanco sobre una pared blanca (WCAG 1.4.3). Lo que cambia es el tinte,
+     que pasa del violeta al azul institucional. */
+  background-color: #0c2538;
   /* Velo en dos tramos. El superior es mas denso porque ahi esta el cielo,
      que en la fotografia sale sobreexpuesto y sin el quedaria un bloque
      blanco; el inferior se afloja para que se vea el patio. */
   background-image:
     linear-gradient(180deg,
-      rgba(36, 22, 74, .62) 0%,
-      rgba(30, 20, 60, .40) 32%,
-      rgba(12, 10, 24, .34) 100%),
+      rgba(7, 57, 89, .62) 0%,
+      rgba(8, 47, 73, .40) 32%,
+      rgba(8, 25, 40, .34) 100%),
     url("/login.jpg");
   background-size: cover;
   /* La columna es mas alta que ancha y la fotografia es apaisada: al cubrir,
@@ -173,7 +224,7 @@ body {
    otra (WCAG 1.4.3). Sin esto, texto blanco sobre una pared blanca. */
 .auth-foto::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 62%;
-  background: linear-gradient(to top, rgba(9, 8, 18, .92) 0%, rgba(9, 8, 18, .55) 45%, rgba(9, 8, 18, 0) 100%);
+  background: linear-gradient(to top, rgba(8, 25, 40, .92) 0%, rgba(8, 25, 40, .55) 45%, rgba(8, 25, 40, 0) 100%);
   pointer-events: none;
 }
 .auth-foto-texto { position: relative; z-index: 1; max-width: 34ch; }
@@ -221,14 +272,19 @@ input:hover, select:hover, textarea:hover { border-color: var(--marca); }
 /* El campo inválido no se señala solo con color (WCAG 1.4.1). */
 input:invalid:not(:placeholder-shown) { border-color: var(--alto); border-width: 2px; }
 
+/* El relleno es sky-700, no sky-600. Con el texto en blanco, sky-600 se queda
+   en 4.10:1 y la etiqueta de un botón es texto normal (14px): WCAG 2.1 AA pide
+   4.5:1 y el 3:1 de texto grande no le aplica. sky-700 da 5.93:1. El sky-600
+   sigue siendo --marca y se usa donde no lleva texto encima: el foco, el borde
+   del campo activo, la pestaña marcada. */
 button {
-  border: 1px solid var(--marca);
-  background: var(--marca); color: #fff;
+  border: 1px solid var(--marca-fuerte);
+  background: var(--marca-fuerte); color: #fff;
   font-weight: 700; cursor: pointer;
   transition: background .15s ease, border-color .15s ease;
 }
-button:hover:not(:disabled) { background: var(--marca-fuerte); border-color: var(--marca-fuerte); }
-button:active:not(:disabled) { background: var(--marca-oscura); }
+button:hover:not(:disabled) { background: var(--marca-oscura); border-color: var(--marca-oscura); }
+button:active:not(:disabled) { background: var(--marca-activa); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 
 button.danger { background: transparent; color: var(--alto); border-color: transparent; }
@@ -306,9 +362,9 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   font-size: var(--t-md); font-weight: 600; line-height: 1.5;
 }
 /* Cada estado lleva además un símbolo, para no depender del color. */
-.alert-error   { background: var(--alto-suave); color: var(--alto); border: 1px solid #f6cfcb; }
+.alert-error   { background: var(--alto-suave); color: var(--alto); border: 1px solid var(--alto-borde); }
 .alert-error::before   { content: "⚠"; font-size: var(--t-base); line-height: 1.3; }
-.alert-success { background: var(--bajo-suave); color: var(--bajo); border: 1px solid #c5e6d6; }
+.alert-success { background: var(--bajo-suave); color: var(--bajo); border: 1px solid var(--bajo-borde); }
 .alert-success::before { content: "✓"; font-size: var(--t-base); line-height: 1.3; }
 .status { margin-top: var(--e4); background: var(--superficie-2); border: 1px solid var(--linea); color: var(--tinta-media); }
 
@@ -356,9 +412,9 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
 }
 .lista-btn--ver  { background: var(--marca-fuerte); border-color: var(--marca-fuerte); }
 .lista-btn--edit { background: var(--superficie); color: var(--tinta-media); border-color: var(--linea-fuerte); }
-.lista-btn--del  { background: var(--superficie); color: var(--alto); border-color: #f0c4c0; }
-.lista-btn--enc  { background: var(--superficie); color: var(--bajo); border-color: #bfe0d0; }
-.lista-btn--pred { background: var(--superficie); color: var(--medio); border-color: #edd7ae; }
+.lista-btn--del  { background: var(--superficie); color: var(--alto); border-color: var(--alto-borde); }
+.lista-btn--enc  { background: var(--superficie); color: var(--bajo); border-color: var(--bajo-borde); }
+.lista-btn--pred { background: var(--superficie); color: var(--medio); border-color: var(--medio-borde); }
 .lista-btn:hover:not(:disabled) { filter: brightness(.96); }
 
 /* ══ Diálogo modal ════════════════════════════════════════════════════ */
@@ -421,7 +477,7 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
 }
 .kpi-icon--person { background: var(--marca-suave); }
-.kpi-icon--brain  { background: #f6eefb; }
+.kpi-icon--brain  { background: var(--edah-suave); }
 .kpi-icon--chart  { background: var(--bajo-suave); }
 .kpi-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .kpi-label {
@@ -458,9 +514,9 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   font-size: var(--t-xs); font-weight: 700; padding: var(--e1) var(--e3);
   border-radius: 20px; white-space: nowrap; flex-shrink: 0; border: 1px solid transparent;
 }
-.priority-tag--alta  { background: var(--alto-suave);  color: var(--alto);  border-color: #f6cfcb; }
-.priority-tag--media { background: var(--medio-suave); color: var(--medio); border-color: #eed9b4; }
-.priority-tag--baja  { background: var(--bajo-suave);  color: var(--bajo);  border-color: #c5e6d6; }
+.priority-tag--alta  { background: var(--alto-suave);  color: var(--alto);  border-color: var(--alto-borde); }
+.priority-tag--media { background: var(--medio-suave); color: var(--medio); border-color: var(--medio-borde); }
+.priority-tag--baja  { background: var(--bajo-suave);  color: var(--bajo);  border-color: var(--bajo-borde); }
 
 .ver-todas-btn {
   display: block; width: 100%; margin-top: var(--e3);
@@ -489,7 +545,7 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   width: 100%; min-height: var(--control); padding: var(--e2) var(--e3);
   border-radius: var(--radio-sm); font-weight: 700; cursor: pointer; font-size: var(--t-md);
 }
-.toggle-btn--active   { background: var(--marca); color: #fff; border: 1px solid var(--marca); }
+.toggle-btn--active   { background: var(--marca-fuerte); color: #fff; border: 1px solid var(--marca-fuerte); }
 .toggle-btn--inactive { background: var(--superficie); color: var(--tinta-media); border: 1px solid var(--linea-fuerte); }
 .toggle-btn--inactive:hover { background: var(--superficie-2); border-color: var(--marca); color: var(--tinta); }
 
@@ -714,7 +770,7 @@ button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-of
 /* ── Accesos ──────────────────────────────────────────────────────────── */
 .ac-contador {
   background: var(--alto);
-  color: #16181c;
+  color: #fff;
   border-radius: 99px;
   padding: 1px var(--e2);
   font-size: var(--t-sm);
