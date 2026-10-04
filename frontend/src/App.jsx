@@ -263,7 +263,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     return `<table class="shap">${features.map((f) => {
       const pct = Math.max(Math.round((Math.abs(f.shap) / maxAbs) * 100), 4);
       const up = f.shap > 0;
-      const color = up ? "#ef4444" : "#059669";
+      const color = up ? "#c2410c" : "#2563eb";
       return `<tr>
         <td class="shap-name">${esc(f.label)} <span class="muted">(${esc(f.value_fmt)})</span></td>
         <td class="shap-bar"><span class="sbar" style="width:${pct}%;background:${color}"></span></td>
@@ -294,14 +294,19 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
   // ── 2. Dashboard ─────────────────────────────────────────────────────────
   let dashboardHTML;
   if (pred) {
-    const riesgoColor = pred.nivel_riesgo === "Alto" ? "#ef4444" : pred.nivel_riesgo === "Medio" ? "#f97316" : "#22c55e";
+    // Mismos tonos que la interfaz, pero escritos a mano: el expediente es un
+    // HTML suelto que se abre en otra pestana y no hereda las variables CSS.
+    // Son los oscuros de la escala, que sobre papel blanco dan entre 7.09:1 y
+    // 8.31:1 y siguen legibles si alguien lo imprime en blanco y negro.
+    const C_ALTO = "#991b1b", C_MEDIO = "#92400e", C_BAJO = "#166534", C_NEUTRO = "#616f86";
+    const riesgoColor = pred.nivel_riesgo === "Alto" ? C_ALTO : pred.nivel_riesgo === "Medio" ? C_MEDIO : C_BAJO;
     const tdahLevel = tdahTexto(pred.nivel_tdah);
     const esTdah = !!pred.nivel_tdah && pred.nivel_tdah !== "Sospecha Baja" && pred.nivel_tdah !== "Sin TDAH";
-    const tdahColor = esTdah ? "#f97316" : "#22c55e";
+    const tdahColor = esTdah ? C_MEDIO : C_BAJO;
     const rendLetra = pred.promedio_final ?? pred.prediccion_notas ?? "—";
-    const rendColor = (rendLetra === "AD" || rendLetra === "A") ? "#22c55e"
-      : rendLetra === "B" ? "#f97316"
-      : rendLetra === "C" ? "#ef4444" : "#94a3b8";
+    const rendColor = (rendLetra === "AD" || rendLetra === "A") ? C_BAJO
+      : rendLetra === "B" ? C_MEDIO
+      : rendLetra === "C" ? C_ALTO : C_NEUTRO;
     const factores = buildFactoresData(pred);
 
     dashboardHTML = `
@@ -425,7 +430,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     .interp p { margin: 0 0 8px; text-align: justify; }
     .shap-legend { font-size: 11px; color: #64748b; margin: 0 0 10px; }
     .shap-legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; margin-right: 2px; }
-    .shap-legend .dot.up { background: #ef4444; } .shap-legend .dot.down { background: #059669; }
+    .shap-legend .dot.up { background: #c2410c; } .shap-legend .dot.down { background: #2563eb; }
     h4.shap-h { font-size: 12px; margin: 12px 0 6px; padding-left: 8px; }
     h4.shap-h.tdah { color: #6366f1; border-left: 3px solid #6366f1; }
     h4.shap-h.riesgo { color: #0ea5e9; border-left: 3px solid #0ea5e9; }
@@ -526,8 +531,11 @@ function ShapFactores({ features }) {
         // Dos tonos por dirección, y no es redundante: el relleno es un gráfico
         // (WCAG 1.4.11 pide 3:1) y la etiqueta es texto (1.4.3 pide 4.5:1). Un
         // solo tono no cumple los dos umbrales a la vez sobre superficie blanca.
-        const barra = up ? "var(--alto-graf)" : "var(--bajo-graf)";
-        const texto = up ? "var(--alto)" : "var(--bajo)";
+        // Naranja y azul, no rojo y verde: con deuteranopia esas dos
+        // direcciones se separan 220 en vez de 167, y aqui confundirlas haria
+        // que la explicacion del modelo dijera lo contrario de lo que dice.
+        const barra = up ? "var(--shap-sube)" : "var(--shap-baja)";
+        const texto = barra;
         return (
           <div key={f.feature} style={{ display: "flex", alignItems: "center", gap: 10, margin: "7px 0" }}>
             <div style={{ width: 210, flexShrink: 0, fontSize: "0.82rem", color: "var(--tinta-media)" }}>

@@ -13,67 +13,90 @@
   /* ── Color ───────────────────────────────────────────────────────────
      Tema claro institucional. Distribución cromática 60-30-10:
        60%  base neutra fría — superficie de lectura, previene fatiga visual
-       30%  azul institucional — navega y acciona
-       10%  escala semántica — describe resultados clínicos, nunca navega
+       30%  azul institucional y verde azulado — navegan y estructuran
+       10%  ámbar de acento y escala semántica de riesgo
      Esa separación de responsabilidades es la que permite que un color
-     signifique siempre lo mismo: el azul jamás informa de un riesgo y el
-     ámbar jamás es un botón.
+     signifique siempre lo mismo: el azul jamás informa de un riesgo, el
+     verde azulado es siempre lo clínico y el ámbar jamás es un botón.
 
      Todos los contrastes están MEDIDOS sobre la superficie donde el color
      aparece de verdad, no estimados (WCAG 2.1 AA: 4.5:1 en texto, 3:1 en
      gráficos y bordes de control).
 
-     Dos escalas por nivel, y la razón importa: App.jsx pinta el nivel de
-     riesgo como TEXTO —`style={{ color: RIESGO_COLORS[nivel] }}`— y también
-     como relleno de gráfico. El umbral no es el mismo (4.5:1 frente a 3:1),
-     así que un solo tono no puede servir para los dos sitios sin fallar en
-     uno. Los tonos -700 son para texto; los `-graf` para rellenos. */
+     App.jsx pinta el nivel de riesgo como TEXTO y también como relleno de
+     gráfico, con umbrales distintos (4.5:1 frente a 3:1). Los tonos de esta
+     paleta son lo bastante oscuros para cumplir los dos, así que «--x» y
+     «--x-graf» coinciden; se conservan ambos nombres porque el código los
+     usa. */
 
-  /* ── 30% · Azul institucional ─────────────────────────────────────── */
-  --marca:        #0284c7;   /* 4.10:1 — fondo de botón y estado activo */
-  --marca-fuerte: #0369a1;   /* 5.93:1 — enlaces, texto y hover del botón */
-  --marca-oscura: #075985;   /* 7.56:1 — titulares */
-  --marca-activa: #0c4a6e;   /* 9.4:1 — boton pulsado */
-  --marca-suave:  #f0f9ff;   /* relleno del elemento activo y chips */
-  --marca-borde:  #bae6fd;
+  /* ── 30% · Azul institucional ──────────────────────────────────────
+     Azul y verde azulado son vecinos en el círculo cromático: la base es
+     análoga, y de ahí la sensación de calma. El ámbar es su complementario y
+     por eso sirve de acento: destaca justo porque rompe la armonía. */
+  --marca:        #2563eb;   /* 5.17:1 — fondo de botón con texto blanco */
+  --marca-fuerte: #1d4ed8;   /* 6.70:1 — hover, botón pulsado, enlaces */
+  --marca-oscura: #1e3a8a;   /* 10.7:1 — titulares */
+  --marca-activa: #172554;   /* 14.0:1 — botón presionado */
+  --marca-suave:  #eff6ff;   /* relleno del elemento activo y chips */
+  --marca-borde:  #bfdbfe;
+
+  /* Acento ámbar. Es FONDO, nunca texto: sobre blanco da 2.15:1 y no se
+     leería. Lleva encima --tinta, que sobre él da 6.81:1. Para cuando el
+     ámbar tiene que ser una línea o un texto visible está la variante
+     fuerte, que sí pasa el umbral por sí sola. */
+  --acento:        #f59e0b;   /* fondo de distintivo, con texto oscuro */
+  --acento-fuerte: #b45309;   /* 5.02:1 — cuando el ámbar es línea o texto */
 
   /* ── 10% · Escala de riesgo ────────────────────────────────────────
-     Enfoque no punitivo: el nivel alto es coral, no rojo saturado. Un
-     #ff0000 sobre el expediente de un niño de 11 años lee como castigo, y
-     lo que describe es una necesidad de apoyo.
+     Distintivos de fondo pastel con texto oscuro, no bloques de rojo
+     saturado. El rojo intenso en superficies grandes lee como castigo, y lo
+     que el sistema comunica es una necesidad de apoyo sobre un niño de 11
+     años. Además el modelo da una alerta temprana, no un diagnóstico, y el
+     color no debería afirmar más que el dato.
+
+     El tono oscuro de cada nivel sirve para TEXTO y para RELLENO de gráfico
+     a la vez: al estar entre 7.09:1 y 8.31:1 supera de sobra los dos
+     umbrales (4.5:1 de texto y 3:1 de gráfico), así que aquí no hace falta
+     la escala doble que sí exigían los tonos medios.
 
      El color NUNCA es el único indicador: cada nivel lleva icono y etiqueta
-     textual, porque WCAG 1.4.1 no admite codificar solo por color. Hace
-     falta además porque con deuteranopia —la daltonía más común— el ámbar y
-     el coral quedan a separación 35 cuando hacen falta 100: son
-     indistinguibles entre sí por tono, y es el icono el que los separa. */
-  --alto:         #b91c1c;   /* 6.47:1 — texto «Riesgo Alto» */
-  --alto-graf:    #ef4444;   /* 3.76:1 — relleno de gráfico */
-  --alto-suave:   #fef2f2;   /* fondo de badge */
+     textual. No es solo por WCAG 1.4.1 — con deuteranopia, la daltonía más
+     común, el medio y el alto quedan a separación 10 cuando hacen falta 100.
+     Son prácticamente el mismo color para ~8% de los varones, y es el icono
+     el que los distingue. */
+  --alto:         #991b1b;   /* 8.31:1 — texto y relleno «Riesgo Alto» */
+  --alto-graf:    #991b1b;
+  --alto-suave:   #fee2e2;   /* fondo del distintivo */
   --alto-borde:   #fecaca;
-  --medio:        #b45309;   /* 5.02:1 — texto «Riesgo Medio» */
-  --medio-graf:   #d97706;   /* 3.19:1 */
-  --medio-suave:  #fffbeb;
+  --medio:        #92400e;   /* 7.09:1 */
+  --medio-graf:   #92400e;
+  --medio-suave:  #fef3c7;
   --medio-borde:  #fde68a;
-  --bajo:         #047857;   /* 5.48:1 — texto «Riesgo Bajo» */
-  --bajo-graf:    #059669;   /* 3.77:1 */
-  --bajo-suave:   #ecfdf5;
-  --bajo-borde:   #a7f3d0;
+  --bajo:         #166534;   /* 7.13:1 */
+  --bajo-graf:    #166534;
+  --bajo-suave:   #dcfce7;
+  --bajo-borde:   #bbf7d0;
 
-  /* Índigo para la psicometría EDAH (inatención, hiperactividad, conducta).
-     Existe para desacoplar conceptualmente la escala clínica de las notas
-     académicas: si el EDAH se pintara con los mismos tonos que el
-     rendimiento, el lector sumaría dos cosas que el modelo trata por
-     separado. */
-  --edah:         #4f46e5;   /* 6.29:1 — texto */
-  --edah-graf:    #6366f1;   /* 4.47:1 — relleno */
-  --edah-suave:   #eef2ff;
-  --edah-borde:   #c7d2fe;
+  /* ── Verde azulado: el módulo del psicólogo ────────────────────────
+     Segundo color de la base análoga. Marca lo clínico —subtotales EDAH,
+     encabezados de tarjeta, cifras de los indicadores— y lo separa del azul,
+     que navega y acciona. Que la psicometría no comparta color con el
+     rendimiento académico es deliberado: el modelo los trata como variables
+     distintas y sumarlos de un vistazo sería leer de más. */
+  --edah:         #0f766e;   /* 5.47:1 — texto y relleno */
+  --edah-graf:    #0f766e;
+  --edah-suave:   #f0fdfa;
+  --edah-borde:   #99f6e4;
+  --dato:         #0f766e;   /* mismo verde azulado: cifras de indicadores */
+  --dato-suave:   #f0fdfa;
 
-  /* Azul informativo: ni marca ni riesgo. Se distingue del institucional
-     para que un dato neutro no se confunda con algo accionable. */
-  --dato:         #1d4ed8;   /* 6.70:1 */
-  --dato-suave:   #eff6ff;
+  /* ── Explicabilidad SHAP ───────────────────────────────────────────
+     Naranja y azul, NO rojo y verde. Con deuteranopia el naranja y el azul
+     quedan a separación 220; el rojo y el verde que había antes, a 167. Es
+     el gráfico donde más importa: si las dos direcciones se confunden, la
+     explicación del modelo dice lo contrario de lo que dice. */
+  --shap-sube:    #c2410c;   /* 5.18:1 — el factor aumenta el indicador */
+  --shap-baja:    #2563eb;   /* 5.17:1 — el factor lo reduce */
 
   /* ── 60% · Base neutra ─────────────────────────────────────────────
      Gris frío. El fondo no es blanco puro: sobre una superficie blanca las
@@ -81,7 +104,7 @@
   --fondo:        #f8fafc;
   --superficie:   #ffffff;   /* tarjetas, modales y tablas */
   --superficie-2: #f1f5f9;   /* cabeceras de tabla y rellenos de apoyo */
-  --tinta:        #0f172a;   /* 17.85:1 — texto principal y titulares */
+  --tinta:        #1e293b;   /* 14.63:1 — texto principal y titulares */
   --tinta-media:  #475569;   /* 7.58:1 — texto secundario y etiquetas */
   /* Texto de apoyo. No es slate-500 exacto: ese da 4.76:1 sobre blanco pero
      baja a 4.34:1 sobre --superficie-2, y ahí es donde se usa de verdad (pies
@@ -127,14 +150,14 @@
   /* Paleta de series para los gráficos. Todas pasan el 3:1 que WCAG 1.4.11
      exige a un elemento gráfico portador de información, medido sobre la
      superficie blanca en la que se dibujan. */
-  --serie-1: #0284c7;   /* 4.10:1 */
-  --serie-2: #059669;   /* 3.77:1 */
-  --serie-3: #6366f1;   /* 4.47:1 */
-  --serie-4: #d97706;   /* 3.19:1 */
-  --serie-5: #ef4444;   /* 3.76:1 */
-  --serie-6: #c026d3;   /* 4.71:1 — fucsia, que no colisiona con ningún
-                           nivel de riesgo: un mismo color no puede
-                           significar dos cosas en la interfaz */
+  --serie-1: #2563eb;   /* 5.17:1 — azul primario */
+  --serie-2: #0f766e;   /* 5.47:1 — verde azulado */
+  --serie-3: #c2410c;   /* 5.18:1 — naranja */
+  --serie-4: #7c3aed;   /* 5.70:1 — violeta */
+  --serie-5: #92400e;   /* 7.09:1 — ámbar oscuro */
+  --serie-6: #be185d;   /* 6.04:1 — rosa, que no colisiona con ningún nivel
+                           de riesgo: un mismo color no puede significar dos
+                           cosas en la interfaz */
 
   color-scheme: light;
 }
@@ -201,15 +224,15 @@ body {
      olvido: el texto va en blanco sobre el velo, y aclararlo dejaria texto
      blanco sobre una pared blanca (WCAG 1.4.3). Lo que cambia es el tinte,
      que pasa del violeta al azul institucional. */
-  background-color: #0c2538;
+  background-color: #0f1e3d;
   /* Velo en dos tramos. El superior es mas denso porque ahi esta el cielo,
      que en la fotografia sale sobreexpuesto y sin el quedaria un bloque
      blanco; el inferior se afloja para que se vea el patio. */
   background-image:
     linear-gradient(180deg,
-      rgba(7, 57, 89, .62) 0%,
-      rgba(8, 47, 73, .40) 32%,
-      rgba(8, 25, 40, .34) 100%),
+      rgba(23, 37, 84, .62) 0%,
+      rgba(20, 32, 70, .40) 32%,
+      rgba(12, 20, 46, .34) 100%),
     url("/login.jpg");
   background-size: cover;
   /* La columna es mas alta que ancha y la fotografia es apaisada: al cubrir,
@@ -224,7 +247,7 @@ body {
    otra (WCAG 1.4.3). Sin esto, texto blanco sobre una pared blanca. */
 .auth-foto::after {
   content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 62%;
-  background: linear-gradient(to top, rgba(8, 25, 40, .92) 0%, rgba(8, 25, 40, .55) 45%, rgba(8, 25, 40, 0) 100%);
+  background: linear-gradient(to top, rgba(12, 20, 46, .92) 0%, rgba(12, 20, 46, .55) 45%, rgba(12, 20, 46, 0) 100%);
   pointer-events: none;
 }
 .auth-foto-texto { position: relative; z-index: 1; max-width: 34ch; }
@@ -278,13 +301,13 @@ input:invalid:not(:placeholder-shown) { border-color: var(--alto); border-width:
    sigue siendo --marca y se usa donde no lleva texto encima: el foco, el borde
    del campo activo, la pestaña marcada. */
 button {
-  border: 1px solid var(--marca-fuerte);
-  background: var(--marca-fuerte); color: #fff;
+  border: 1px solid var(--marca);
+  background: var(--marca); color: #fff;
   font-weight: 700; cursor: pointer;
   transition: background .15s ease, border-color .15s ease;
 }
-button:hover:not(:disabled) { background: var(--marca-oscura); border-color: var(--marca-oscura); }
-button:active:not(:disabled) { background: var(--marca-activa); }
+button:hover:not(:disabled) { background: var(--marca-fuerte); border-color: var(--marca-fuerte); }
+button:active:not(:disabled) { background: var(--marca-oscura); }
 button:disabled { opacity: .55; cursor: not-allowed; }
 
 button.danger { background: transparent; color: var(--alto); border-color: transparent; }
@@ -545,7 +568,7 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   width: 100%; min-height: var(--control); padding: var(--e2) var(--e3);
   border-radius: var(--radio-sm); font-weight: 700; cursor: pointer; font-size: var(--t-md);
 }
-.toggle-btn--active   { background: var(--marca-fuerte); color: #fff; border: 1px solid var(--marca-fuerte); }
+.toggle-btn--active   { background: var(--marca); color: #fff; border: 1px solid var(--marca); }
 .toggle-btn--inactive { background: var(--superficie); color: var(--tinta-media); border: 1px solid var(--linea-fuerte); }
 .toggle-btn--inactive:hover { background: var(--superficie-2); border-color: var(--marca); color: var(--tinta); }
 
