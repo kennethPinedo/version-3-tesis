@@ -503,6 +503,7 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
 .badge--clinico { background: var(--clinico-suave); color: var(--clinico-texto); border-color: var(--clinico-borde); }  /* 6.73:1 */
 .badge--ok      { background: #dcfce7; color: #166534; border-color: #bbf7d0; }  /* 6.49:1 */
 .badge--neutro  { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }  /* 6.92:1 */
+.badge--aviso   { background: var(--medio-suave); color: var(--medio); border-color: var(--medio-borde); }  /* 6.37:1 */
 
 
 .lista-actions { display: flex; gap: var(--e2); flex-wrap: wrap; }
@@ -996,16 +997,61 @@ button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-of
 }
 
 /* ── Control de Inasistencias por fecha ───────────────────────────────────── */
-.asist-tabla-wrap { overflow-x: auto; }
+/* El histórico iba con la tabla genérica y las filas quedaban apretadas: con
+   cinco columnas y fechas largas, leer de un vistazo en qué día faltó el alumno
+   costaba más de lo que debería. Aquí el aire es la funcionalidad. */
+.asist-tabla-wrap { overflow-x: auto; margin-top: var(--e6); }
+
+.tabla-historico { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.tabla-historico th,
+.tabla-historico td {
+  padding: 12px 16px;
+  text-align: left;
+  vertical-align: middle;
+}
+.tabla-historico thead th {
+  background: var(--fondo);
+  color: var(--tinta-media);
+  font-size: var(--t-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--linea);
+  white-space: nowrap;
+}
+.tabla-historico tbody tr { border-bottom: 1px solid var(--linea); }
+.tabla-historico tbody tr:hover { background: var(--fondo); }
+.tabla-historico tbody tr:last-child { border-bottom: none; }
+.tabla-historico .col-acciones { text-align: right; }
+
+/* Eliminar: secundario y de contorno. Un relleno rojo sólido en cada fila
+   convierte el histórico en un muro de alarma, cuando borrar es la excepción. */
+.btn-borrar {
+  width: auto;
+  background: var(--superficie);
+  color: var(--alto);               /* 8.31:1 sobre blanco */
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.btn-borrar:hover:not(:disabled) { background: var(--alto-suave); border-color: var(--alto); }
 /* El icono va delante del texto y no depende del color: con deuteranopia el
    rojo y el cian se distinguen, pero el símbolo funciona sin verlos. */
-.asist-falta { color: var(--alto); font-weight: 650; white-space: nowrap; }
-.asist-ok    { color: var(--bajo); font-weight: 650; white-space: nowrap; }
+/* El estado va como distintivo suave, no como texto rojo en negrita: una
+   inasistencia es un dato que registrar, no una falta que señalar. Se usa el
+   ámbar y no el rojo porque el rojo queda reservado al riesgo alto, y un día
+   suelto sin venir a clase no es eso. */
+.asist-falta { white-space: nowrap; }
+.asist-ok    { white-space: nowrap; }
 
+/* El total se alinea con el padding de la tabla para que la cifra caiga bajo
+   su columna y no flotando a un lado. */
 .asist-total {
   margin-top: var(--e5);
   border-top: 1px solid var(--linea);
-  padding-top: var(--e4);
+  padding: var(--e4) 16px 0;   /* 16px laterales: el mismo que las celdas */
 }
 .asist-total-fila {
   display: flex;

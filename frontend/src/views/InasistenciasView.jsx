@@ -37,6 +37,33 @@ function diaSemana(iso) {
 
 const esFinDeSemana = (iso) => [0, 6].includes(diaSemana(iso));
 
+/**
+ * Último día lectivo hasta hoy incluido.
+ *
+ * Si se abre la pantalla un sábado, preseleccionar «hoy» deja el formulario
+ * bloqueado nada más entrar, con el botón inerte y sin que quede claro por qué.
+ * Se retrocede al viernes, que es lo que el docente iba a anotar de todos modos.
+ */
+function ultimoDiaLectivo() {
+  const d = new Date();
+  while ([0, 6].includes(d.getDay())) d.setDate(d.getDate() - 1);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+/** Solo el día de la semana, capitalizado: «Lunes». */
+function soloDia(iso) {
+  if (!iso) return "—";
+  const n = NOMBRE_DIA[diaSemana(iso)];
+  return n.charAt(0).toUpperCase() + n.slice(1);
+}
+
+/** Solo la fecha numérica: «20/07/2026». */
+function soloFecha(iso) {
+  if (!iso) return "—";
+  const [a, m, d] = iso.split("-").map(Number);
+  return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${a}`;
+}
+
 const NOMBRE_DIA = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 
 function formatearFecha(iso) {
@@ -48,7 +75,7 @@ function formatearFecha(iso) {
 
 export default function InasistenciasView({ alumnos, notify, confirmar, onGuardado }) {
   const [alumnoId, setAlumnoId] = useState("");
-  const [fecha, setFecha] = useState(hoyISO());
+  const [fecha, setFecha] = useState(ultimoDiaLectivo());
   const [estado, setEstado] = useState(ESTADOS[0]);
   const [datos, setDatos] = useState(null);
   const [guardando, setGuardando] = useState(false);
@@ -114,10 +141,11 @@ export default function InasistenciasView({ alumnos, notify, confirmar, onGuarda
 
   const borrar = async (registro) => {
     if (confirmar && !await confirmar({
-      titulo: `¿Eliminar el registro del ${formatearFecha(registro.fecha)}?`,
-      mensaje: registro.estado === "No asistió"
-        ? "El total de inasistencias bajará en uno y la predicción se recalculará."
-        : "Ese día dejará de constar como asistido.",
+      titulo: `¿Eliminar la inasistencia del ${soloFecha(registro.fecha)}?`,
+      mensaje: "Esta acción no se puede deshacer. "
+        + (registro.estado === "No asistió"
+            ? "El total de inasistencias bajará en uno y la predicción se recalculará."
+            : "Ese día dejará de constar como asistido."),
       tono: "peligro",
       textoConfirmar: "Sí, eliminar",
     })) return;
@@ -195,17 +223,28 @@ export default function InasistenciasView({ alumnos, notify, confirmar, onGuarda
             </div>
           )}
 
-          <button className="full" type="submit" disabled={guardando || !alumnoId || finde}>
-            {guardando
-              ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Guardando…</>)
-              : "Registrar"}
-          </button>
+          <div className="full">
+            <button type="submit" disabled={guardando || !alumnoId || finde}
+                    aria-describedby="asist-boton-ayuda">
+              {guardando
+                ? (<><span className="spinner" aria-hidden="true" style={{ marginRight: 8, verticalAlign: "-2px" }} />Guardando…</>)
+                : "Registrar"}
+            </button>
+            {/* Un botón inerte sin explicación obliga a adivinar qué falta. */}
+            {!guardando && (!alumnoId || finde) && (
+              <span id="asist-boton-ayuda" className="form-legend" style={{ marginTop: 6, display: "block" }}>
+                {!alumnoId
+                  ? "Selecciona un estudiante para registrar."
+                  : "Selecciona un día lectivo para registrar."}
+              </span>
+            )}
+          </div>
         </form>
       </article>
 
       {alumnoSel && datos && (
         <article className="panel">
-          <h2 className="chart-title">
+          <h2 className="chart-title" style={{ marginBottom: 12 }}>
             Histórico de {alumnoSel.nombre} {alumnoSel.apellido}
           </h2>
 
@@ -215,26 +254,35 @@ export default function InasistenciasView({ alumnos, notify, confirmar, onGuarda
             </p>
           ) : (
             <div className="asist-tabla-wrap">
-              <table className="tabla">
+              {/* Sin columna «Estudiante»: el nombre ya está en el título y
+                  repetirlo en cada fila gasta ancho sin añadir nada. La fecha se
+                  separa del día porque se leen distinto —la fecha se busca, el
+                  día se reconoce— y juntos obligaban a descifrar la celda. */}
+              <table className="tabla-historico">
                 <thead>
-                  <tr><th>Estudiante</th><th>Fecha</th><th>Estado</th><th>Registrado por</th><th></th></tr>
+                  <tr>
+                    <th scope="col">Fecha</th>
+                    <th scope="col">Día</th>
+                    <th scope="col">Estado</th>
+                    <th scope="col">Registrado por</th>
+                    <th scope="col" className="col-acciones">Acciones</th>
+                  </tr>
                 </thead>
                 <tbody>
                   {datos.registros.map((r) => (
                     <tr key={r.id}>
-                      <td>{alumnoSel.nombre} {alumnoSel.apellido}</td>
-                      <td>{formatearFecha(r.fecha)}</td>
+                      <td>{soloFecha(r.fecha)}</td>
+                      <td>{soloDia(r.fecha)}</td>
                       <td>
-                        {/* El icono acompaña al color: con deuteranopia el rojo
-                            y el cian se distinguen, pero el símbolo no depende
-                            de verlos (WCAG 1.4.1). */}
-                        <span className={r.estado === "No asistió" ? "asist-falta" : "asist-ok"}>
-                          <span aria-hidden="true">{r.estado === "No asistió" ? "✕" : "✓"}</span> {r.estado}
+                        {/* El texto dice el estado por sí solo: el color lo
+                            refuerza, no lo sustituye (WCAG 1.4.1). */}
+                        <span className={`badge ${r.estado === "No asistió" ? "badge--aviso" : "badge--ok"}`}>
+                          {r.estado}
                         </span>
                       </td>
                       <td>{r.registrado_por}</td>
-                      <td>
-                        <button type="button" className="lista-btn lista-btn--del" onClick={() => borrar(r)}>
+                      <td className="col-acciones">
+                        <button type="button" className="btn-borrar" onClick={() => borrar(r)}>
                           Eliminar
                         </button>
                       </td>
