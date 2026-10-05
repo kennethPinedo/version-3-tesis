@@ -621,6 +621,12 @@ export default function App() {
   const [listaStatus, setListaStatus] = useState({ msg: "", error: false });
   const [predicciones, setPredicciones] = useState([]);
   const [alumnoFormError, setAlumnoFormError] = useState("");
+  // Un campo obligatorio vacío no es un error mientras el usuario no haya
+  // tenido ocasión de escribirlo. Se marca solo tras salir de él (onBlur) o
+  // tras intentar enviar; antes, el formulario aparecía entero en rojo nada
+  // más abrirlo.
+  const [alumnoTocado, setAlumnoTocado] = useState({});
+  const [alumnoEnviado, setAlumnoEnviado] = useState(false);
   const [encuestaStatus, setEncuestaStatus] = useState({ msg: "", error: false });
   const [notasModoLista, setNotasModoLista] = useState("actuales");
   const [notasModoCarga, setNotasModoCarga] = useState("individual");
@@ -898,21 +904,69 @@ export default function App() {
 
   // Cambio de contraseña, obligatorio en el primer ingreso y tras una reposición.
 
+  /** Mensaje de error de cada campo, o cadena vacía si está bien.
+   *
+   * Reutiliza las mismas reglas que ya validaba submitAlumno; no añade
+   * criterios nuevos. El servidor vuelve a comprobarlo todo: esto solo evita
+   * un viaje para decir lo obvio, y sitúa el aviso junto al campo en vez de en
+   * un bloque al final que obliga a buscar cuál de los nueve falla.
+   */
+  const erroresAlumno = (f) => {
+    const doc = TIPOS_DOCUMENTO[f.tipo_documento];
+    const numero = (f.numero_documento || "").trim().toUpperCase();
+    const e = {};
+    if (!f.nombre.trim()) e.nombre = "Ingresa el nombre.";
+    else if (!RE_NOMBRE.test(f.nombre.trim()))
+      e.nombre = "Solo letras, números, espacios, apóstrofo y guion.";
+    if (!f.apellido.trim()) e.apellido = "Ingresa el apellido.";
+    else if (!RE_NOMBRE.test(f.apellido.trim()))
+      e.apellido = "Solo letras, números, espacios, apóstrofo y guion.";
+    if (!f.contacto_emergente.trim()) e.contacto_emergente = "Ingresa un contacto de emergencia.";
+    if (!String(f.edad).trim()) e.edad = "Ingresa la edad.";
+    else if (Number(f.edad) < 11 || Number(f.edad) > 12) e.edad = "La edad debe ser 11 o 12 años.";
+    if (!String(f.grado).trim()) e.grado = "Selecciona el grado.";
+    if (!numero) e.numero_documento = `Ingresa el número de ${doc.etiqueta.toLowerCase()}.`;
+    else if (!doc.patron.test(numero))
+      e.numero_documento = `${doc.ayuda} Llevas ${numero.length} de ${doc.longitud}.`;
+    if (!String(f.anio_cursada).trim()) e.anio_cursada = "Ingresa el año de cursada.";
+    if (!f.genero) e.genero = "Selecciona el género.";
+    return e;
+  };
+
+  /** ¿Se le enseña ya el error de este campo? Solo si lo tocó o si pulsó enviar. */
+  const errorAlumno = (campo) =>
+    (alumnoEnviado || alumnoTocado[campo]) ? (erroresAlumno(alumnoForm)[campo] || "") : "";
+
+  const tocarAlumno = (campo) => setAlumnoTocado((t) => ({ ...t, [campo]: true }));
+
+  /** Props comunes de cada campo: marca el grupo y enlaza el mensaje de error. */
+  const campoAlumno = (campo) => {
+    const msg = errorAlumno(campo);
+    return {
+      grupo: `field-group${msg ? " field-group--error" : ""}`,
+      input: {
+        onBlur: () => tocarAlumno(campo),
+        "aria-invalid": msg ? true : undefined,
+        "aria-describedby": msg ? `err-${campo}` : undefined,
+      },
+      msg,
+    };
+  };
+
   const submitAlumno = async (e) => {
     e.preventDefault();
+    setAlumnoEnviado(true);
     setAlumnoFormError("");
-    // Validación en el cliente: el backend vuelve a comprobarlo todo, pero
-    // avisar aquí evita un viaje al servidor para decir lo obvio.
+    const errs = erroresAlumno(alumnoForm);
+    const campos = Object.keys(errs);
+    if (campos.length) {
+      // El foco va al primero que falla: con nueve campos, un mensaje genérico
+      // obliga a recorrerlos de uno en uno para dar con el que falta.
+      document.getElementById(`alumno-${campos[0].replace(/_/g, "-")}`)?.focus();
+      return;
+    }
     const doc = TIPOS_DOCUMENTO[alumnoForm.tipo_documento];
     const numero = (alumnoForm.numero_documento || "").trim().toUpperCase();
-    if (!RE_NOMBRE.test(alumnoForm.nombre.trim()) || !RE_NOMBRE.test(alumnoForm.apellido.trim())) {
-      setAlumnoFormError("El nombre y el apellido solo admiten letras, números, espacios, apóstrofo y guion.");
-      return;
-    }
-    if (!doc.patron.test(numero)) {
-      setAlumnoFormError(`${doc.etiqueta}: ${doc.ayuda} Has escrito ${numero.length} de ${doc.longitud}.`);
-      return;
-    }
 
     const body = {
       nombre: alumnoForm.nombre, apellido: alumnoForm.apellido,
@@ -940,6 +994,8 @@ export default function App() {
     try {
       await req("/alumnos/", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
       setAlumnoForm(initialAlumno);
+      setAlumnoTocado({});
+      setAlumnoEnviado(false);
       await loadAlumnos();
       notify("Alumno registrado.");
     } catch (err) {
@@ -1883,28 +1939,40 @@ export default function App() {
             <h1 className="page-title">Registrar Nuevo Alumno</h1>
             <article className="panel">
               <form className="grid" onSubmit={submitAlumno}>
-                <div className="field-group">
-                  <label htmlFor="alumno-nombre">Nombre</label>
+                <div className={campoAlumno("nombre").grupo}>
+                  <label htmlFor="alumno-nombre">Nombre <span className="req" aria-hidden="true">*</span></label>
                   <input id="alumno-nombre" type="text" value={alumnoForm.nombre}
-                         pattern="[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9'\- ]*"
-                         title="Solo letras, números, espacios, apóstrofo y guion"
-                         onChange={(e) => setAlumnoForm({ ...alumnoForm, nombre: e.target.value })} required />
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, nombre: e.target.value })}
+                         required {...campoAlumno("nombre").input} />
+                  {campoAlumno("nombre").msg && (
+                    <span id="err-nombre" className="field-error">{campoAlumno("nombre").msg}</span>
+                  )}
                 </div>
-                <div className="field-group">
-                  <label htmlFor="alumno-apellido">Apellido</label>
+                <div className={campoAlumno("apellido").grupo}>
+                  <label htmlFor="alumno-apellido">Apellido <span className="req" aria-hidden="true">*</span></label>
                   <input id="alumno-apellido" type="text" value={alumnoForm.apellido}
-                         pattern="[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9'\- ]*"
-                         title="Solo letras, números, espacios, apóstrofo y guion"
-                         onChange={(e) => setAlumnoForm({ ...alumnoForm, apellido: e.target.value })} required />
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, apellido: e.target.value })}
+                         required {...campoAlumno("apellido").input} />
+                  {campoAlumno("apellido").msg && (
+                    <span id="err-apellido" className="field-error">{campoAlumno("apellido").msg}</span>
+                  )}
                 </div>
-                <div className="field-group">
-                  <label htmlFor="alumno-contacto">Contacto de Emergencia</label>
-                  <input id="alumno-contacto" type="text" value={alumnoForm.contacto_emergente} onChange={(e) => setAlumnoForm({ ...alumnoForm, contacto_emergente: e.target.value })} required />
-                </div>
-                <div className="field-group">
-                  <label htmlFor="alumno-edad">Edad</label>
-                  <input id="alumno-edad" type="number" min={11} max={12} value={alumnoForm.edad} onChange={(e) => setAlumnoForm({ ...alumnoForm, edad: e.target.value })} required />
-                </div>
+                {(() => { const c = campoAlumno("contacto_emergente"); return (
+                <div className={c.grupo}>
+                  <label htmlFor="alumno-contacto-emergente">Contacto de Emergencia <span className="req" aria-hidden="true">*</span></label>
+                  <input id="alumno-contacto-emergente" type="text" value={alumnoForm.contacto_emergente}
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, contacto_emergente: e.target.value })}
+                         required {...c.input} />
+                  {c.msg && <span id="err-contacto_emergente" className="field-error">{c.msg}</span>}
+                </div>); })()}
+                {(() => { const c = campoAlumno("edad"); return (
+                <div className={c.grupo}>
+                  <label htmlFor="alumno-edad">Edad <span className="req" aria-hidden="true">*</span></label>
+                  <input id="alumno-edad" type="number" min={11} max={12} value={alumnoForm.edad}
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, edad: e.target.value })}
+                         required {...c.input} />
+                  {c.msg && <span id="err-edad" className="field-error">{c.msg}</span>}
+                </div>); })()}
                 <div className="field-group">
                   <label htmlFor="alumno-nivel">Nivel</label>
                   <select
@@ -1919,20 +1987,22 @@ export default function App() {
                   </select>
                 </div>
 
-                <div className="field-group">
-                  <label htmlFor="alumno-grado">Grado</label>
+                {(() => { const c = campoAlumno("grado"); return (
+                <div className={c.grupo}>
+                  <label htmlFor="alumno-grado">Grado <span className="req" aria-hidden="true">*</span></label>
                   <select
                     id="alumno-grado"
                     value={alumnoForm.grado}
                     onChange={(e) => setAlumnoForm({ ...alumnoForm, grado: e.target.value })}
-                    required
+                    required {...c.input}
                   >
                     <option value="">Selecciona</option>
                     {(NIVELES[alumnoForm.nivel] ?? []).map((g) => (
                       <option key={g} value={g}>{g}° de {alumnoForm.nivel}</option>
                     ))}
                   </select>
-                </div>
+                  {c.msg && <span id="err-grado" className="field-error">{c.msg}</span>}
+                </div>); })()}
 
                 <div className="field-group">
                   <label htmlFor="alumno-tipo-doc">Tipo de documento</label>
@@ -1948,10 +2018,10 @@ export default function App() {
                   </select>
                 </div>
 
-                <div className="field-group">
-                  <label htmlFor="alumno-num-doc">Número de documento</label>
+                <div className={campoAlumno("numero_documento").grupo}>
+                  <label htmlFor="alumno-numero-documento">Número de documento <span className="req" aria-hidden="true">*</span></label>
                   <input
-                    id="alumno-num-doc"
+                    id="alumno-numero-documento"
                     type="text"
                     inputMode={alumnoForm.tipo_documento === "PASAPORTE" ? "text" : "numeric"}
                     maxLength={TIPOS_DOCUMENTO[alumnoForm.tipo_documento].longitud}
@@ -1964,25 +2034,38 @@ export default function App() {
                         : e.target.value.replace(/\D/g, "");
                       setAlumnoForm({ ...alumnoForm, numero_documento: permitido });
                     }}
-                    required
+                    required {...campoAlumno("numero_documento").input}
                   />
+                  {campoAlumno("numero_documento").msg && (
+                    <span id="err-numero_documento" className="field-error">
+                      {campoAlumno("numero_documento").msg}
+                    </span>
+                  )}
                   <span id="alumno-doc-ayuda" className="form-legend" style={{ marginTop: 6 }}>
                     {TIPOS_DOCUMENTO[alumnoForm.tipo_documento].ayuda}{" "}
                     {alumnoForm.numero_documento.length}/{TIPOS_DOCUMENTO[alumnoForm.tipo_documento].longitud}.
                     Se guarda cifrado y solo se muestran los 4 últimos dígitos.
                   </span>
                 </div>
-                <div className="field-group">
-                  <label htmlFor="alumno-anio">Año de cursada</label>
-                  <input id="alumno-anio" type="number" placeholder="2025" value={alumnoForm.anio_cursada} onChange={(e) => setAlumnoForm({ ...alumnoForm, anio_cursada: e.target.value })} required />
-                </div>
-                <div className="field-group">
-                  <label htmlFor="alumno-genero">Género</label>
-                  <select id="alumno-genero" value={alumnoForm.genero} onChange={(e) => setAlumnoForm({ ...alumnoForm, genero: e.target.value })} required>
+                {(() => { const c = campoAlumno("anio_cursada"); return (
+                <div className={c.grupo}>
+                  <label htmlFor="alumno-anio-cursada">Año de cursada <span className="req" aria-hidden="true">*</span></label>
+                  <input id="alumno-anio-cursada" type="number" placeholder="2025" value={alumnoForm.anio_cursada}
+                         onChange={(e) => setAlumnoForm({ ...alumnoForm, anio_cursada: e.target.value })}
+                         required {...c.input} />
+                  {c.msg && <span id="err-anio_cursada" className="field-error">{c.msg}</span>}
+                </div>); })()}
+                {(() => { const c = campoAlumno("genero"); return (
+                <div className={c.grupo}>
+                  <label htmlFor="alumno-genero">Género <span className="req" aria-hidden="true">*</span></label>
+                  <select id="alumno-genero" value={alumnoForm.genero}
+                          onChange={(e) => setAlumnoForm({ ...alumnoForm, genero: e.target.value })}
+                          required {...c.input}>
                     <option value="">Selecciona</option>
                     {GENEROS.map((g) => <option key={g} value={g}>{g}</option>)}
                   </select>
-                </div>
+                  {c.msg && <span id="err-genero" className="field-error">{c.msg}</span>}
+                </div>); })()}
 
                 {alumnoFormError && <div className="alert-error" role="alert">{alumnoFormError}</div>}
                 <button className="full" type="submit">Registrar Alumno</button>
@@ -1996,11 +2079,15 @@ export default function App() {
           const predsPorAlumno = {};
           todosPredicciones.forEach((p) => { predsPorAlumno[p.alumno] = p; });
 
+          // Devuelve la VARIANTE del distintivo, no un color. Antes devolvía el
+          // color y se aplicaba como fondo con el texto heredado de la celda, que
+          // es oscuro: «Con Predicción» quedaba en 2.67:1. Cada variante lleva
+          // ahora su propio trío fondo/texto/borde definido en la hoja de estilos.
           const estadoAlumno = (id) => {
             const p = predsPorAlumno[id];
-            if (!p) return { label: "Registrado", color: "var(--tinta-suave)" };
-            if (p.nivel_riesgo) return { label: "Con Predicción", color: "var(--dato)" };
-            return { label: "Evaluado", color: "var(--bajo)" };
+            if (!p) return { label: "Sin predicción", variante: "neutro" };
+            if (p.nivel_riesgo) return { label: "Con Predicción", variante: "clinico" };
+            return { label: "Evaluado", variante: "ok" };
           };
 
           const iniciarEdicion = async (a) => {
@@ -2331,7 +2418,7 @@ export default function App() {
                               {a.documento_enmascarado ?? "\u2014"}
                             </td>
                             <td>{a.inasistencias ?? 0}</td>
-                            <td><span className="lista-badge" style={{ background: est.color }}>{est.label}</span></td>
+                            <td><span className={`badge badge--${est.variante}`}>{est.label}</span></td>
                             <td>
                               <div className="lista-actions">
                                 <button className="lista-btn lista-btn--ver" onClick={() => setListaVerAlumno(a.id)}>Ver</button>
