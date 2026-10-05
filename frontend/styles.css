@@ -510,8 +510,8 @@ button.danger:hover:not(:disabled) { background: var(--alto-suave); border-color
   border: 1px solid transparent;
 }
 .badge--clinico { background: var(--clinico-suave); color: var(--clinico-texto); border-color: var(--clinico-borde); }  /* 6.73:1 */
-.badge--ok      { background: #dcfce7; color: #166534; border-color: #bbf7d0; }  /* 6.49:1 */
-.badge--neutro  { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }  /* 6.92:1 */
+.badge--ok      { background: var(--bajo-suave); color: var(--bajo); border-color: var(--bajo-borde); }  /* 6.49:1 */
+.badge--neutro  { background: var(--superficie-2); color: var(--tinta-media); border-color: var(--linea); }  /* 6.92:1 */
 .badge--aviso   { background: var(--medio-suave); color: var(--medio); border-color: var(--medio-borde); }  /* 6.37:1 */
 
 
