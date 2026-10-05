@@ -98,6 +98,15 @@
      quedan a separación 220; el rojo y el verde que había antes, a 167. Es
      el gráfico donde más importa: si las dos direcciones se confunden, la
      explicación del modelo dice lo contrario de lo que dice. */
+  /* Error de interacción, distinto del «riesgo alto» aunque compartan tono.
+     Uno dice «esta acción puede romper algo» o «este campo está mal»; el otro
+     describe un hallazgo clínico sobre un alumno. Mezclarlos haría que el rojo
+     de un formulario mal rellenado se leyera con el mismo peso que una alerta
+     sobre un menor. */
+  --error:        #b91c1c;   /* 6.47:1 sobre blanco */
+  --error-suave:  #fef2f2;
+  --error-borde:  #fca5a5;
+
   --shap-sube:    #c2410c;   /* 5.18:1 — el factor aumenta el indicador */
   --shap-baja:    #2563eb;   /* 5.17:1 — el factor lo reduce */
 
@@ -352,18 +361,18 @@ input:focus-visible, select:focus-visible, textarea:focus-visible {
 .field-group--error input,
 .field-group--error select,
 .field-group--error textarea {
-  border: 2px solid var(--alto);
-  background: var(--alto-suave);
+  border: 2px solid var(--error);
+  background: var(--error-suave);
 }
 .field-error {
   margin-top: var(--e1);
-  color: var(--alto);          /* 8.31:1 sobre blanco */
+  color: var(--error);         /* 6.47:1 sobre blanco */
   font-size: 0.8rem;
   line-height: 1.4;
 }
 /* Asterisco de campo obligatorio. Marca la obligatoriedad ANTES de escribir,
    que es el trabajo que antes hacía —mal— el borde rojo. */
-.req { color: var(--alto); font-weight: 700; margin-left: 2px; }
+.req { color: var(--error); font-weight: 700; margin-left: 2px; }
 
 /* El relleno es --marca directamente: #2563eb con texto blanco da 5.17:1, por
    encima del 4.5:1 que WCAG 2.1 AA pide al texto normal (la etiqueta de un
@@ -1029,14 +1038,14 @@ button.enlace:focus-visible { outline: 2px solid var(--marca-fuerte); outline-of
 .btn-borrar {
   width: auto;
   background: var(--superficie);
-  color: var(--alto);               /* 8.31:1 sobre blanco */
-  border: 1px solid #fca5a5;
+  color: var(--error);              /* 6.47:1 sobre blanco */
+  border: 1px solid var(--error-borde);
   border-radius: 6px;
   padding: 4px 12px;
   font-size: 0.8rem;
   font-weight: 600;
 }
-.btn-borrar:hover:not(:disabled) { background: var(--alto-suave); border-color: var(--alto); }
+.btn-borrar:hover:not(:disabled) { background: var(--error-suave); border-color: var(--error); }
 /* El icono va delante del texto y no depende del color: con deuteranopia el
    rojo y el cian se distinguen, pero el símbolo funciona sin verlos. */
 /* El estado va como distintivo suave, no como texto rojo en negrita: una
