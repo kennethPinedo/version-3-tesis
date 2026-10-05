@@ -186,11 +186,11 @@ const initialNota = { alumno: "", bimestre: "1" };
  * dice la etiqueta del eje, no el color.
  */
 const FACTOR_COLORS = {
-  "Inatención": "var(--edah-graf)",
-  "Hiperactividad": "var(--edah-graf)",
-  "Conducta": "var(--edah-graf)",
-  "Rend. Académico": "var(--serie-1)",
-  "Inasistencias": "var(--serie-4)",
+  "Inatención": "var(--factor-conductual)",
+  "Hiperactividad": "var(--factor-conductual)",
+  "Conducta": "var(--factor-conductual)",
+  "Bajo rendimiento académico": "var(--factor-academico)",
+  "Inasistencias": "var(--factor-academico)",
 };
 const colorFactor = (nombre) => FACTOR_COLORS[nombre] ?? "var(--tinta-suave)";
 
@@ -239,7 +239,11 @@ function buildFactoresData(pred) {
   return [
     { name: "Inatención", valor: Math.round((pred.total_atencion / 15) * 100) },
     { name: "Hiperactividad", valor: Math.round((pred.total_hiperactividad / 15) * 100) },
-    { name: "Rend. Académico", valor: deficitAcademico },
+    // El valor YA es un déficit: (3 - promedio) / 3. Llamarlo «Rend.
+    // Académico» invertía su lectura —una barra larga parecía buen
+    // rendimiento cuando significa lo contrario—, así que se renombra en vez
+    // de recalcularse. En todas las barras, más largo = más riesgo.
+    { name: "Bajo rendimiento académico", valor: deficitAcademico },
     { name: "Inasistencias", valor: Math.min(100, Math.round(((pred.inasistencias ?? 0) / 20) * 100)) },
   ].sort((a, b) => b.valor - a.valor);
 }
@@ -285,11 +289,13 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
   // ámbito de la función, porque la consumen DOS secciones del documento (el
   // resumen y la ficha de predicción); dentro de un bloque `if` quedaba fuera
   // de alcance para la segunda y lanzaba ReferenceError.
-  const tdahConfPct = pred
-    ? (pred.confianza_tdah != null
-        ? Math.round(pred.confianza_tdah * 100)
-        : Math.round((pred.prob_tdah ?? 0) * 100))
-    : 0;
+  // UNA sola cifra en todo el sistema: la probabilidad que devuelve el modelo
+  // de que el alumno presente TDAH, con un decimal. Antes convivian tres
+  // numeros para lo mismo —72.99% «de confianza», 90% y 89.9%— y dos de ellos
+  // eran el mismo valor redondeado distinto. «Confianza» ademas no era esto:
+  // era la probabilidad de la clase ganadora, que responde a otra pregunta y
+  // leerla como «probabilidad de TDAH» es entender mal el resultado.
+  const tdahProbPct = pred ? ((pred.prob_tdah ?? 0) * 100).toFixed(1) : "0.0";
 
   // ── 2. Dashboard ─────────────────────────────────────────────────────────
   let dashboardHTML;
@@ -312,7 +318,7 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     dashboardHTML = `
       <div class="kpis">
         <div class="kpi"><span class="kpi-l">Riesgo Académico</span><span class="kpi-v" style="color:${riesgoColor}">${esc(pred.nivel_riesgo)}</span><span class="kpi-s">Probabilidad: ${Math.round((pred.probabilidad ?? 0) * 100)}%</span></div>
-        <div class="kpi"><span class="kpi-l">Indicador TDAH (modelo IA)</span><span class="kpi-v" style="color:${tdahColor}">${esc(tdahLevel)}</span><span class="kpi-s">Confianza: ${tdahConfPct}%</span></div>
+        <div class="kpi"><span class="kpi-l">Sospecha de TDAH</span><span class="kpi-v" style="color:${tdahColor}">${esc(tdahLevel)}</span><span class="kpi-s">Probabilidad: ${tdahProbPct}%</span></div>
         <div class="kpi"><span class="kpi-l">Rendimiento General</span><span class="kpi-v" style="color:${rendColor}">${esc(rendLetra)}</span><span class="kpi-s">Promedio (nota literal)</span></div>
       </div>
       <h3>Factores que influyen en el riesgo</h3>
@@ -352,8 +358,8 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
     prediccionHTML = `
       <table class="info">
         <tr><td class="k">Nivel de Riesgo Académico</td><td>${esc(pred.nivel_riesgo)} (${Math.round((pred.probabilidad ?? 0) * 100)}%)</td></tr>
-        <tr><td class="k">Indicador TDAH (modelo IA)</td><td>${esc(tdahTexto(pred.nivel_tdah))} (${tdahConfPct}% de confianza)</td></tr>
-        ${pred.referencia_psicometrica ? `<tr><td class="k">Referencia psicométrica</td><td><span class="muted">${esc(pred.referencia_psicometrica)} — no decide la clasificación</span></td></tr>` : ""}
+        <tr><td class="k">Sospecha de TDAH (tamizaje)</td><td>${esc(tdahTexto(pred.nivel_tdah))} — probabilidad ${tdahProbPct}%</td></tr>
+        ${pred.referencia_psicometrica ? `<tr><td class="k">Referencia psicométrica EDAH</td><td><span class="muted">indicadores compatibles con TDAH (HI &ge; 7 o DA &ge; 7) — no decide la clasificación</span></td></tr>` : ""}
         <tr><td class="k">Atención (DA)</td><td>${pred.da_total ?? "—"}/15</td></tr>
         <tr><td class="k">Hiperactividad (HI)</td><td>${pred.hi_total ?? "—"}/15</td></tr>
         <tr><td class="k">Conducta (TC)</td><td>${pred.tc_total ?? "—"}/30</td></tr>
@@ -1490,7 +1496,7 @@ export default function App() {
           const tdahNivel = dashData ? tdahNivelProb(dashData.nivel_tdah) : "Baja";
           const riesgo = dashData?.nivel_riesgo ?? "Bajo";
           const rendLetra = dashData?.promedio_final ?? dashData?.prediccion_notas ?? "—";
-          const confPct = Math.round((dashData?.confianza_tdah ?? 0) * 100);
+          const probPct = ((dashData?.prob_tdah ?? 0) * 100).toFixed(1);
           const riesgoPct = Math.round((dashData?.probabilidad ?? 0) * 100);
 
           // Distribución real del modelo; null en predicciones antiguas.
@@ -1658,10 +1664,10 @@ export default function App() {
                       <div className="kpi-body">
                         <span className="kpi-label">Riesgo TDAH</span>
                         <span className="kpi-value" style={{ color: colorTdah[tdahNivel] }}>
-                          Probabilidad {tdahNivel}
+                          Sospecha {tdahNivel}
                         </span>
                         <span className="kpi-sub">
-                          Probabilidad: {confPct}%
+                          Probabilidad: {probPct}%
                           <span className="kpi-arrow" style={{ color: colorTdah[tdahNivel] }} aria-hidden="true">
                             {tdahNivel !== "Baja" ? " ⚠" : " ✓"}
                           </span>
@@ -1731,7 +1737,11 @@ export default function App() {
 
                   <div className="charts-row">
                     <div className="chart-panel">
-                      <h3 className="chart-title">Factores que Influyen en el Riesgo</h3>
+                      <h3 className="chart-title">Indicadores del estudiante</h3>
+                      <p className="leyenda-factores">
+                        <span><span style={{ color: "var(--factor-conductual)" }} aria-hidden="true">●</span> <b>Conductual (EDAH)</b></span>
+                        <span><span style={{ color: "var(--factor-academico)" }} aria-hidden="true">●</span> <b>Académico</b></span>
+                      </p>
                       <ResponsiveContainer width="100%" height={220}>
                         <BarChart data={factoresData} layout="vertical"
                                   margin={{ left: 8, right: 48, top: 4, bottom: 4 }}>
@@ -1877,7 +1887,7 @@ export default function App() {
                         <tr key={p.id}>
                           <td>{p.alumno_nombre ?? `Alumno ${p.alumno}`}</td>
                           <td><b style={{ color: RIESGO_COLORS[p.nivel_riesgo] }}>{p.nivel_riesgo}</b></td>
-                          <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Probabilidad {tdahNivelProb(p.nivel_tdah)}</b></td>
+                          <td><b style={{ color: PROB_COLORS["Sospecha " + tdahNivelProb(p.nivel_tdah)] }}>Sospecha {tdahNivelProb(p.nivel_tdah)}</b></td>
                           <td>{p.inasistencias ?? 0}</td>
                           <td style={{ fontSize: "0.8rem", color: "var(--tinta-suave)" }}>{formatFecha(p.fecha_prediccion)}</td>
                         </tr>
@@ -2713,18 +2723,15 @@ export default function App() {
                   <span style={{ color: (p.nivel_tdah && p.nivel_tdah !== "Sospecha Baja" && p.nivel_tdah !== "Sin TDAH") ? "var(--alto)" : "var(--bajo)", fontWeight: "bold" }}>
                     {tdahTexto(p.nivel_tdah)}
                   </span>
-                  {p.confianza_tdah != null && (
-                    <span style={{ color: "var(--tinta-media)" }}> ({(p.confianza_tdah * 100).toFixed(2)}% de confianza)</span>
+                  {p.prob_tdah != null && (
+                    <span style={{ color: "var(--tinta-media)" }}> — probabilidad {(p.prob_tdah * 100).toFixed(1)}%</span>
                   )}<br />
                   {p.total_atencion != null && (
                     <><b>Atención (DA):</b> {p.total_atencion}/15{"  "}<b>Hiperactividad (HI):</b> {p.total_hiperactividad}/15{"  "}{p.total_conducta != null && <><b>Conducta (TC):</b> {p.total_conducta}/30</>}<br /></>
                   )}
-                  {p.prob_tdah != null && (
-                    <><b>Prob. de TDAH (modelo):</b> {Math.round(p.prob_tdah * 100)}%<br /></>
-                  )}
                   {p.referencia_psicometrica && (
                     <small style={{ color: "var(--tinta-suave)", fontStyle: "italic" }}>
-                      Referencia psicométrica (no decide): {p.referencia_psicometrica}<br />
+                      Referencia psicométrica EDAH: indicadores compatibles con TDAH (HI ≥ 7 o DA ≥ 7). No decide la clasificación.<br />
                     </small>
                   )}
                   <b>Promedio de Notas:</b> {p.prediccion_notas}<br />
@@ -2733,7 +2740,8 @@ export default function App() {
                   {/* Botón SHAP */}
                   <div style={{ marginTop: 10 }}>
                     <button
-                      style={{ width: "auto", background: isShapOpen ? "var(--superficie-2)" : "var(--marca)", padding: "6px 14px", fontSize: "0.82rem" }}
+                      className="btn-sec"
+                      aria-expanded={isShapOpen}
                       onClick={async () => {
                         if (isShapOpen) { setShapPredId(null); setShapData(null); return; }
                         setShapLoading(true); setShapPredId(p.id); setShapData(null);
@@ -2747,7 +2755,7 @@ export default function App() {
                         setShapLoading(false);
                       }}
                     >
-                      {isShapOpen ? "▲ Ocultar explicación SHAP" : "▼ Explicar con SHAP (IA)"}
+                      {isShapOpen ? "▲ Ocultar explicación SHAP" : "▼ Ver explicación SHAP"}
                     </button>
                   </div>
 
@@ -2762,9 +2770,12 @@ export default function App() {
                             🧠 ¿Por qué el modelo predijo esto?
                           </p>
                           <p style={{ margin: "0 0 16px", color: "var(--tinta-suave)", fontSize: "0.78rem" }}>
+                            {/* La leyenda nombraba rojo y verde mientras las barras ya
+                                eran naranja y azul: quien la leia buscaba en el grafico
+                                dos colores que no estaban. */}
                             Cada barra muestra cuánto influyó cada factor.{" "}
-                            <span style={{ color: "var(--alto)", fontWeight: 700 }}>● rojo = aumenta</span>{"  ·  "}
-                            <span style={{ color: "var(--bajo)", fontWeight: 700 }}>● verde = reduce</span>
+                            <span style={{ color: "var(--shap-sube)", fontWeight: 700 }}>● naranja = aumenta</span>{"  ·  "}
+                            <span style={{ color: "var(--shap-baja)", fontWeight: 700 }}>● azul = reduce</span>
                           </p>
 
                           {shapData?.tdah && (

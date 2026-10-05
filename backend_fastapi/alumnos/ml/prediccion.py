@@ -141,18 +141,41 @@ def _generar_interpretacion(nivel: str, hi_total: int, da_total: int, tc_total: 
         f"la conducta es un factor secundario."
     )
 
-    if nivel == "Sospecha Alta":
-        p2 = (f"Los indicadores nucleares (atención e hiperactividad) son altos, por lo que el modelo "
-              f"estima una «Sospecha Alta» de TDAH (probabilidad: {prob_pct}%); se recomienda "
-              f"evaluación diagnóstica especializada.")
-    elif nivel == "Sospecha Media":
-        p2 = (f"Los indicadores de atención e hiperactividad son moderados, por lo que el modelo estima "
-              f"una «Sospecha Media» de TDAH ({prob_pct}%); conviene seguimiento y evaluación.")
-    else:
-        p2 = (f"Los indicadores nucleares del TDAH son bajos, por lo que el modelo estima una "
-              f"«Sospecha Baja» de TDAH (probabilidad: {prob_pct}%).")
+    # La conclusión nombra SOLO las dimensiones que de verdad están elevadas.
+    # Antes afirmaba «los indicadores nucleares son altos» por el mero hecho de
+    # que el nivel fuera Sospecha Alta, sin mirar sus valores: el mismo informe
+    # podía decir «Déficit de Atención bajo (6/15)» en un párrafo y «atención e
+    # hiperactividad son altos» en el siguiente. Quien lo lee no puede saber
+    # cuál de las dos frases creer, y es el documento que sustenta una
+    # derivación a especialista.
+    nucleares = []
+    if da_n != "bajo":
+        nucleares.append(f"déficit de atención ({da_n})")
+    if hi_n != "bajo":
+        nucleares.append(f"hiperactividad/impulsividad ({hi_n})")
+    if tc_n != "bajo":
+        nucleares.append(f"trastornos de conducta ({tc_n}, factor secundario)")
 
-    return p1 + "\n\n" + p2
+    if nucleares:
+        detalle = " y ".join([", ".join(nucleares[:-1]), nucleares[-1]]) if len(nucleares) > 1 else nucleares[0]
+        apertura = f"Destaca {detalle}"
+    else:
+        apertura = "Ninguna dimensión alcanza el umbral de relevancia"
+
+    if nivel == "Sospecha Alta":
+        p2 = (f"{apertura}. El modelo estima una «Sospecha Alta» de TDAH "
+              f"(probabilidad: {prob_pct}%); se recomienda evaluación por un especialista.")
+    elif nivel == "Sospecha Media":
+        p2 = (f"{apertura}. El modelo estima una «Sospecha Media» de TDAH "
+              f"(probabilidad: {prob_pct}%); se recomienda evaluación por un especialista.")
+    else:
+        p2 = (f"{apertura}. El modelo estima una «Sospecha Baja» de TDAH "
+              f"(probabilidad: {prob_pct}%).")
+
+    p3 = ("Este resultado es una alerta temprana de tamizaje, no un diagnóstico: "
+          "el diagnóstico de TDAH solo puede emitirlo un profesional habilitado.")
+
+    return p1 + "\n\n" + p2 + "\n\n" + p3
 
 
 # ══════════════════════════════════════════════════════════════════════════════
