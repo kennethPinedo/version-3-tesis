@@ -475,14 +475,14 @@ function buildExpedienteHTML({ alumno, encuesta, pred, shap, shapRiesgo, recomen
 </head><body>
   <header class="doc-head">
     <h1>Expediente Psicológico</h1>
-    <p class="sub">Sistema de Predicción Educativa · Emitido el ${fecha}</p>
+    <p class="sub">Aplicación Web de Predicción Educativa · Emitido el ${fecha}</p>
   </header>
   <section><h2>1. Datos del Estudiante</h2>${datosAlumno}</section>
   <section><h2>2. Resumen del Dashboard</h2>${dashboardHTML}</section>
   <section><h2>3. Encuesta Psicoeducativa (EDAH)</h2>${encuestaHTML}</section>
   <section><h2>4. Predicción Académica</h2>${prediccionHTML}</section>
   <section><h2>5. Plan de Acción (analítica prescriptiva)</h2>${recomendacionesHTML}</section>
-  <footer class="doc-foot">Documento generado automáticamente — Sistema de Predicción Educativa</footer>
+  <footer class="doc-foot">Documento generado automáticamente — Aplicación Web de Predicción Educativa</footer>
   <script>window.addEventListener('load',function(){setTimeout(function(){window.print();},350);});</script>
 </body></html>`;
 }
@@ -1324,7 +1324,7 @@ export default function App() {
       <PantallaAcceso>
         {dialogo}
         <section className="auth-card">
-          <h1>Sistema de Predicción Educativa</h1>
+          <h1>Aplicación Web de Predicción Educativa</h1>
 
               <p>Inicia sesión</p>
               <form onSubmit={onLogin}>
