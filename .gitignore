@@ -38,3 +38,7 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Submodulo huerfano retirado: apuntaba a un repositorio que nunca se registro
+# en .gitmodules, asi que al clonar solo aparecia una carpeta vacia.
+backend_tesis/

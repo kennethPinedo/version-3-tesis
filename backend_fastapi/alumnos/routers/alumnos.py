@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from alumnos.models import (
-    Alumno, Asistencia, Encuesta, ExpedientePsicologico, HistorialInasistencias,
+    Alumno, Asistencia, Encuesta, ExpedientePsicologico,
     Nota, PrediccionAcademica, Usuario,
 )
 from alumnos.services import generar_prediccion_alumno
@@ -123,11 +123,6 @@ class AlumnoCreate(BaseModel):
             return f"En {self.nivel} solo se admite {grados} grado."
         _, motivo = cripto.validar(self.tipo_documento, self.numero_documento)
         return motivo
-
-
-class InasistenciasUpdate(BaseModel):
-    """Módulo Control de Inasistencias (rol Docente)."""
-    inasistencias: int = Field(ge=0, le=MAX_INASISTENCIAS)
 
 
 def _alumno_dict(a: Alumno) -> dict:
@@ -259,97 +254,6 @@ def update_alumno(alumno_id: int, data: AlumnoCreate, db: Session = Depends(get_
     db.refresh(a)
     return _alumno_dict(a)
 
-
-@router.put("/alumnos/{alumno_id}/inasistencias")
-def update_inasistencias(
-    alumno_id: int,
-    data: InasistenciasUpdate,
-    db: Session = Depends(get_db),
-    usuario: Optional[Usuario] = Depends(_usuario_opcional),
-):
-    """Persiste las inasistencias acumuladas y actualiza el vector predictivo.
-
-    Las inasistencias son una de las tres variables del MODELO 2
-    (Promedio, Inasistencias, Prob_TDAH), así que al cambiarlas la predicción
-    vigente queda obsoleta y se regenera aquí mismo. Si el alumno todavía no
-    tiene encuesta EDAH no es un error: el valor se guarda y la predicción se
-    generará cuando exista la encuesta.
-    """
-    a = _get_alumno(db, alumno_id)
-    anterior = int(getattr(a, "inasistencias", 0) or 0)
-    a.inasistencias = data.inasistencias
-
-    # Queda constancia del cambio. Sin esto solo se conserva el ultimo numero y
-    # no hay forma de distinguir una correccion de captura de un empeoramiento
-    # real del estudiante, ni de saber quien lo registro.
-    if anterior != data.inasistencias:
-        db.add(HistorialInasistencias(
-            alumno_id=alumno_id,
-            valor_anterior=anterior,
-            valor_nuevo=data.inasistencias,
-            anio_lectivo=getattr(a, "anio_cursada", None),
-            registrado_por=getattr(usuario, "usuario", None) if usuario else None,
-        ))
-
-    db.commit()
-    db.refresh(a)
-
-    prediccion_actualizada = False
-    detalle: Optional[str] = None
-    try:
-        generar_prediccion_alumno(db, alumno_id)
-        prediccion_actualizada = True
-    except HTTPException as exc:
-        detalle = str(exc.detail)
-
-    return {
-        "alumno": _alumno_dict(a),
-        "prediccion_actualizada": prediccion_actualizada,
-        "detalle": detalle,
-        "mensaje": (
-            f"Inasistencias actualizadas a {data.inasistencias} día(s)."
-            + (" Predicción recalculada." if prediccion_actualizada else "")
-        ),
-    }
-
-
-@router.get("/alumnos/{alumno_id}/inasistencias/historial")
-def historial_inasistencias(alumno_id: int, db: Session = Depends(get_db)):
-    """Cambios registrados en el contador de inasistencias de un estudiante.
-
-    Responde a lo que el numero suelto no puede: cuando subio, cuanto subio de
-    una vez y quien lo anoto. Un salto de 4 a 40 dias en una sola anotacion se
-    parece mas a un error de captura que a un mes de ausencias, y el modelo de
-    riesgo usa ese dato.
-    """
-    a = _get_alumno(db, alumno_id)
-    filas = (
-        db.query(HistorialInasistencias)
-        .filter(HistorialInasistencias.alumno_id == alumno_id)
-        .order_by(HistorialInasistencias.fecha.desc(), HistorialInasistencias.id.desc())
-        .limit(100)
-        .all()
-    )
-    return {
-        "alumno": alumno_id,
-        "valor_actual": int(getattr(a, "inasistencias", 0) or 0),
-        "anio_lectivo": getattr(a, "anio_cursada", None),
-        # El tope es del ano lectivo completo: decirlo evita que «45» se lea
-        # como un porcentaje o como dias de un bimestre.
-        "maximo_admitido": MAX_INASISTENCIAS,
-        "movimientos": [
-            {
-                "id": h.id,
-                "valor_anterior": h.valor_anterior,
-                "valor_nuevo": h.valor_nuevo,
-                "diferencia": h.valor_nuevo - h.valor_anterior,
-                "anio_lectivo": h.anio_lectivo,
-                "registrado_por": h.registrado_por or "No consta",
-                "fecha": h.fecha.isoformat() if h.fecha else None,
-            }
-            for h in filas
-        ],
-    }
 
 
 @router.delete("/alumnos/{alumno_id}/", status_code=204)
