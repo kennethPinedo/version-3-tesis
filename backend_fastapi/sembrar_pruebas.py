@@ -64,16 +64,10 @@ DNI_BASE = 99000000
 
 SEMILLA = 20260929
 
-NOMBRES = [
-    "Ana", "Luis", "Rosa", "Carlos", "Maria", "Jorge", "Elena", "Miguel",
-    "Sofia", "Diego", "Carmen", "Andres", "Lucia", "Pedro", "Julia", "Raul",
-    "Paula", "Victor", "Nora", "Hugo",
-]
-APELLIDOS = [
-    "Quispe", "Rojas", "Mendoza", "Huaman", "Vargas", "Castro", "Flores",
-    "Ramos", "Chavez", "Salazar", "Ccahuana", "Pariona", "Cordova", "Lujan",
-    "Ticona", "Zarate", "Ayala", "Bustamante", "Nolasco", "Yupanqui",
-]
+# Los alumnos se llaman «Alum 1», «Alum 2»... y no con nombres de persona.
+# Antes se combinaban dos listas de nombres y apellidos peruanos, y el resultado
+# —«Elena Castro 27»— se podia leer como un estudiante real al verlo en el
+# repositorio. Un dato de prueba tiene que delatarse solo.
 GENEROS = ["Masculino", "Femenino", "No especificado"]
 
 # Areas nucleares. Se usan tres de las once del plan para que el promedio se
@@ -152,8 +146,8 @@ def generar(cantidad: int) -> list[dict]:
 
         alumnos.append({
             "id": ident,
-            "nombre": NOMBRES[n % len(NOMBRES)],
-            "apellido": f"{APELLIDOS[(n * 7 + 3) % len(APELLIDOS)]} {ident:02d}",
+            "nombre": "Alum",
+            "apellido": str(ident),
             "edad": edad,
             "nivel": "Secundaria",
             "grado": 1,
@@ -356,8 +350,8 @@ def exportar(cantidad: int, carpeta: Path) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--cantidad", type=int, default=40,
-                   help="cuantos estudiantes sembrar (por omision 40)")
+    p.add_argument("--cantidad", type=int, default=30,
+                   help="cuantos estudiantes sembrar (por omision 30)")
     p.add_argument("--limpiar", action="store_true",
                    help="retira solo los estudiantes que sembro este script")
     p.add_argument("--exportar", metavar="CARPETA", nargs="?",
