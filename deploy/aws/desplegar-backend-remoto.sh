@@ -120,8 +120,17 @@ print('  las dependencias cargan correctamente')
 
 echo
 echo "== 6/6 - Levantando los contenedores ==============================="
+# El nginx.conf del repositorio es solo HTTP. configurar-https.sh reescribe
+# el del servidor con los certificados de Let's Encrypt, asi que copiarlo a
+# ciegas tiraba el HTTPS en cada despliegue del backend: el sitio estuvo 26
+# dias sin cifrado sin que nada lo avisara. Si el del servidor ya habla de
+# ssl_certificate, se conserva.
 ssh_ec2 "sudo cp /opt/tesis/fuente/deploy/aws/docker-compose.yml /opt/tesis/ \
-         && sudo cp /opt/tesis/fuente/deploy/aws/nginx.conf /opt/tesis/ \
+         && if sudo grep -q ssl_certificate /opt/tesis/nginx.conf 2>/dev/null; then \
+              echo '  aviso nginx.conf conservado: ya tiene HTTPS configurado'; \
+            else \
+              sudo cp /opt/tesis/fuente/deploy/aws/nginx.conf /opt/tesis/; \
+            fi \
          && sudo mkdir -p /opt/tesis/certbot/www \
          && cd /opt/tesis && sudo docker compose up -d && sleep 20 && sudo docker compose ps"
 
