@@ -171,6 +171,11 @@ def _alumno_dict(a: Alumno, faltas: Optional[int] = None) -> dict:
         "faltas_registradas": int(faltas or 0),
         "tipo_documento": a.tipo_documento,
         "documento_enmascarado": cripto.enmascarar(numero) if numero else "—",
+        # Un «—» no distingue «nunca se registró» de «está guardado pero la
+        # clave actual no lo descifra», y son dos cosas muy distintas: la
+        # primera se arregla escribiéndolo, la segunda no se arregla nunca.
+        # Mostrarlas igual hacía parecer que la ficha estaba a medio cargar.
+        "documento_ilegible": bool(a.documento_cifrado) and not numero,
     }
 
 
@@ -268,10 +273,17 @@ def ver_documento(alumno_id: int, db: Session = Depends(get_db)):
     a = _get_alumno(db, alumno_id)
     numero = cripto.descifrar(a.documento_cifrado) if a.documento_cifrado else ""
     if not numero:
+        # El motivo importa: si no hay nada guardado se escribe y listo; si hay
+        # algo que no se descifra, no se va a poder recuperar y hay que decirlo.
         raise HTTPException(
             status_code=404,
-            detail=("Este estudiante no tiene documento registrado, o se guardó con "
-                    "una clave de cifrado distinta a la actual."),
+            detail=(
+                "El documento de este estudiante está guardado pero cifrado con "
+                "una clave que ya no existe, así que no se puede recuperar. "
+                "Vuelve a registrarlo desde «Editar»."
+                if a.documento_cifrado else
+                "Este estudiante no tiene documento registrado."
+            ),
         )
     return {"tipo": a.tipo_documento, "numero": numero}
 

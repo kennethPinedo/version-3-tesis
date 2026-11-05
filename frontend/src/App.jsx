@@ -2124,7 +2124,7 @@ export default function App() {
 
             // El documento está cifrado: hay que pedirlo aparte para poder editarlo.
             let numero = "";
-            if (a.documento_enmascarado && a.documento_enmascarado !== "\u2014") {
+            if (a.documento_enmascarado && a.documento_enmascarado !== "\u2014" && !a.documento_ilegible) {
               try {
                 numero = (await req(`/alumnos/${a.id}/documento`)).numero ?? "";
               } catch {
@@ -2325,9 +2325,15 @@ export default function App() {
                       <p>
                         <b>{a.tipo_documento ?? "Documento"}:</b>{" "}
                         <span style={{ fontFamily: "ui-monospace, Consolas, monospace", letterSpacing: ".06em" }}>
-                          {docRevelado[a.id] ?? a.documento_enmascarado}
+                          {docRevelado[a.id] ?? (a.documento_ilegible ? "no recuperable" : a.documento_enmascarado)}
                         </span>
-                        {a.documento_enmascarado !== "—" && !docRevelado[a.id] && (
+                        {a.documento_ilegible && (
+                          <span className="form-legend" style={{ display: "block", marginTop: 6 }}>
+                            Se guardó cifrado con una clave que ya no existe. Vuelve a
+                            registrarlo desde «Editar».
+                          </span>
+                        )}
+                        {a.documento_enmascarado !== "—" && !a.documento_ilegible && !docRevelado[a.id] && (
                           <button
                             type="button"
                             className="dash-link-btn"
@@ -2484,7 +2490,7 @@ export default function App() {
                             <td>{a.grado}</td>
                             <td>{a.edad}</td>
                             <td style={{ fontFamily: "ui-monospace, Consolas, monospace", whiteSpace: "nowrap" }}>
-                              {a.documento_enmascarado ?? "\u2014"}
+                              {a.documento_ilegible ? "no recuperable" : (a.documento_enmascarado ?? "\u2014")}
                             </td>
                             <td>{a.inasistencias ?? 0}</td>
                             <td><span className={`badge badge--${est.variante}`}>{est.label}</span></td>
