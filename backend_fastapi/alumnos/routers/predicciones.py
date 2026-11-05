@@ -11,6 +11,7 @@ from alumnos.models import Alumno, PrediccionAcademica
 from alumnos.ml.prediccion import obtener_shap, obtener_shap_riesgo
 from alumnos.ml.recomendaciones import generar_recomendaciones
 from alumnos.services import generar_prediccion_alumno, nivel_tdah_cribado
+from alumnos.fechas import iso_utc
 
 router = APIRouter()
 
@@ -172,7 +173,7 @@ def _pred_dict(p: PrediccionAcademica, alumno_nombre: Optional[str] = None) -> d
         "probabilidad": p.probabilidad,
         "prediccion_notas": p.prediccion_notas,
         "condiciones_psicoeducativas": p.condiciones_psicoeducativas,
-        "fecha_prediccion": p.fecha_prediccion.isoformat() if p.fecha_prediccion else None,
+        "fecha_prediccion": iso_utc(p.fecha_prediccion),
         "nivel_tdah": nivel_tdah,
         "confianza_tdah": _campo_float(fields, "Confianza_TDAH"),
         "referencia_psicometrica": fields.get("Referencia_Psicometrica"),

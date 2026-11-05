@@ -10,6 +10,7 @@ from database import get_db
 from alumnos.models import Alumno, EdicionEncuesta, Encuesta
 from alumnos.services import generar_prediccion_alumno
 from alumnos.services import auth_service as auth
+from alumnos.fechas import iso_utc
 
 router = APIRouter()
 
@@ -96,7 +97,7 @@ def _encuesta_dict(e: Encuesta, db: Optional[Session] = None) -> dict:
         anio = datetime.utcnow().year
         d["ediciones"] = [
             {
-                "fecha": x.fecha_edicion.isoformat() if x.fecha_edicion else None,
+                "fecha": iso_utc(x.fecha_edicion),
                 "editado_por": x.editado_por or "No consta",
                 "resumen": x.resumen or "",
             }

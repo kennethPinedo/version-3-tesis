@@ -254,13 +254,16 @@ export default function InasistenciasView({ alumnos, notify, confirmar, onGuarda
             </p>
           ) : (
             <div className="asist-tabla-wrap">
-              {/* Sin columna «Estudiante»: el nombre ya está en el título y
-                  repetirlo en cada fila gasta ancho sin añadir nada. La fecha se
-                  separa del día porque se leen distinto —la fecha se busca, el
-                  día se reconoce— y juntos obligaban a descifrar la celda. */}
+              {/* La columna «Estudiante» se mantiene aunque el nombre esté en
+                  el título: CP024 la verifica fila a fila, y en una captura o
+                  una impresión de la tabla el título puede no acompañarla. La
+                  fecha se separa del día porque se leen distinto —la fecha se
+                  busca, el día se reconoce— y juntos obligaban a descifrar la
+                  celda. */}
               <table className="tabla-historico">
                 <thead>
                   <tr>
+                    <th scope="col">Estudiante</th>
                     <th scope="col">Fecha</th>
                     <th scope="col">Día</th>
                     <th scope="col">Estado</th>
@@ -271,6 +274,7 @@ export default function InasistenciasView({ alumnos, notify, confirmar, onGuarda
                 <tbody>
                   {datos.registros.map((r) => (
                     <tr key={r.id}>
+                      <td>{alumnoSel.nombre} {alumnoSel.apellido}</td>
                       <td>{soloFecha(r.fecha)}</td>
                       <td>{soloDia(r.fecha)}</td>
                       <td>

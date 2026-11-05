@@ -4,16 +4,18 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
 from alumnos.models import (
-    Alumno, Asistencia, Encuesta, ExpedientePsicologico,
+    Alumno, Asistencia, Encuesta, ExpedientePsicologico, HistorialInasistencias,
     Nota, PrediccionAcademica, Usuario,
 )
 from alumnos.services import generar_prediccion_alumno
 from alumnos.services import auth_service as auth
 from alumnos.services import cripto_service as cripto
+from alumnos.fechas import iso_utc
 
 
 def _usuario_opcional(
@@ -65,7 +67,7 @@ class AlumnoCreate(BaseModel):
     apellido: str = Field(min_length=2, max_length=100)
     # El instrumento se aplica en el tramo 6.o de primaria - 1.o de secundaria,
     # cuyas edades tipicas son 11 y 12 anios.
-    edad: int = Field(ge=11, le=12)
+    edad: int
     nivel: str = Field(default="Secundaria")
     grado: int = Field(ge=1, le=6, description="Número de grado dentro del nivel")
     anio_cursada: int = Field(default=2024, ge=2000, le=2100)
@@ -73,6 +75,19 @@ class AlumnoCreate(BaseModel):
     genero: str = "No especificado"
     tipo_documento: str = Field(default="DNI")
     numero_documento: str = Field(min_length=1, max_length=20)
+
+    @field_validator("edad")
+    @classmethod
+    def _edad_del_tramo(cls, v: int) -> int:
+        # Pydantic respondia a ge/le con «Input should be less than or equal to
+        # 12»: en ingles y sin explicar el tramo. El mensaje es lo unico que ve
+        # el usuario, asi que lo damos nosotros.
+        if v < 11 or v > 12:
+            raise ValueError(
+                "La edad debe ser 11 o 12 años: el instrumento EDAH solo está "
+                "validado para el tramo de 6° de primaria a 1° de secundaria."
+            )
+        return v
 
     @field_validator("nombre", "apellido")
     @classmethod
@@ -125,7 +140,18 @@ class AlumnoCreate(BaseModel):
         return motivo
 
 
-def _alumno_dict(a: Alumno) -> dict:
+def _faltas_registradas(db: Session, alumno_id: int) -> int:
+    """Días de asistencia guardados con fecha, que son los que impiden borrar.
+
+    «Alumno.inasistencias» NO sirve para esto: incluye
+    «inasistencias_previas», el contador agregado que la migración heredó del
+    sistema anterior y que no tiene ninguna fila detrás. Un alumno con 8
+    inasistencias previas y ningún día registrado sí se puede eliminar.
+    """
+    return db.query(Asistencia).filter(Asistencia.alumno_id == alumno_id).count()
+
+
+def _alumno_dict(a: Alumno, faltas: Optional[int] = None) -> dict:
     """El documento sale SIEMPRE enmascarado. El número completo se obtiene
     con GET /alumnos/{id}/documento, en una llamada aparte y deliberada."""
     numero = cripto.descifrar(a.documento_cifrado) if a.documento_cifrado else ""
@@ -140,6 +166,9 @@ def _alumno_dict(a: Alumno) -> dict:
         "contacto_emergente": a.contacto_emergente,
         "genero": a.genero,
         "inasistencias": int(getattr(a, "inasistencias", 0) or 0),
+        # Lo usa el diálogo de baja para no prometer un borrado que la base va
+        # a rechazar. Ver _faltas_registradas.
+        "faltas_registradas": int(faltas or 0),
         "tipo_documento": a.tipo_documento,
         "documento_enmascarado": cripto.enmascarar(numero) if numero else "—",
     }
@@ -187,12 +216,26 @@ def tipos_documento():
 
 @router.get("/niveles")
 def niveles():
-    return [{"nivel": n, "grados": list(range(1, tope + 1))} for n, tope in NIVELES.items()]
+    # NIVELES ya guarda la lista de grados admitidos, no el tope. Generarla con
+    # range() daba «[6] + 1» y reventaba con 500: el formulario de alta se
+    # quedaba sin grados y la interfaz lo mostraba como «backend apagado»,
+    # porque un 500 de FastAPI sale sin cabeceras CORS y el navegador no puede
+    # distinguirlo de un servidor caído.
+    return [{"nivel": n, "grados": grados} for n, grados in NIVELES.items()]
 
 
 @router.get("/alumnos/")
 def list_alumnos(db: Session = Depends(get_db)):
-    return [_alumno_dict(a) for a in db.query(Alumno).order_by(Alumno.id).all()]
+    # Una sola consulta agrupada para las faltas de todos: con una por alumno
+    # el listado haría 45 consultas extra.
+    faltas = dict(
+        db.query(Asistencia.alumno_id, func.count(Asistencia.id))
+        .group_by(Asistencia.alumno_id).all()
+    )
+    return [
+        _alumno_dict(a, faltas.get(a.id, 0))
+        for a in db.query(Alumno).order_by(Alumno.id).all()
+    ]
 
 
 @router.post("/alumnos/", status_code=201)
@@ -216,7 +259,7 @@ def create_alumno(data: AlumnoCreate, db: Session = Depends(get_db)):
 
 @router.get("/alumnos/{alumno_id}/")
 def get_alumno(alumno_id: int, db: Session = Depends(get_db)):
-    return _alumno_dict(_get_alumno(db, alumno_id))
+    return _alumno_dict(_get_alumno(db, alumno_id), _faltas_registradas(db, alumno_id))
 
 
 @router.get("/alumnos/{alumno_id}/documento")
@@ -278,6 +321,14 @@ def delete_alumno(alumno_id: int, db: Session = Depends(get_db)):
          db.query(PrediccionAcademica).filter(PrediccionAcademica.alumno_id == alumno_id).count()),
         ("expediente", "expedientes",
          db.query(ExpedientePsicologico).filter(ExpedientePsicologico.alumno_id == alumno_id).count()),
+        # Las asistencias tambien referencian al alumno. Faltaban aqui, asi que
+        # un alumno que solo tuviera faltas pasaba la comprobacion y moria
+        # contra la clave foranea: en PostgreSQL con un 500 crudo y en SQLite
+        # borrandolo igual y dejando las faltas apuntando a nadie.
+        ("dia de asistencia", "dias de asistencia",
+         db.query(Asistencia).filter(Asistencia.alumno_id == alumno_id).count()),
+        ("movimiento de inasistencias", "movimientos de inasistencias",
+         db.query(HistorialInasistencias).filter(HistorialInasistencias.alumno_id == alumno_id).count()),
     ]
     bloqueos = [(sing, plur, n) for sing, plur, n in dependencias if n]
 
@@ -350,7 +401,7 @@ def _asistencia_dict(x: Asistencia) -> dict:
         "fecha": x.fecha.isoformat() if x.fecha else None,
         "estado": x.estado,
         "registrado_por": x.registrado_por or "No consta",
-        "fecha_registro": x.fecha_registro.isoformat() if x.fecha_registro else None,
+        "fecha_registro": iso_utc(x.fecha_registro),
     }
 
 

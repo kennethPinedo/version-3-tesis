@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from alumnos.models import Alumno, ExpedientePsicologico
+from alumnos.fechas import iso_utc
 
 router = APIRouter()
 
@@ -54,7 +55,7 @@ def _exp_dict(e: ExpedientePsicologico) -> dict:
         "alumno": e.alumno_id,
         "nivel_preocupacion": e.nivel_preocupacion,
         "archivo_pdf": e.archivo_pdf,
-        "fecha_registro": e.fecha_registro.isoformat() if e.fecha_registro else None,
+        "fecha_registro": iso_utc(e.fecha_registro),
     }
 
 

@@ -5,7 +5,7 @@ import {
 } from "recharts";
 
 import { req, reqJson } from "./lib/api";
-import { guardarToken, borrarToken, leerToken } from "./lib/sesion";
+import { guardarToken, borrarToken, leerToken, leerVista, guardarVista } from "./lib/sesion";
 import { NAV_LABELS, puedeGestionarAlumnos, puedeVer, viewsDeRol, vistaInicial } from "./lib/rbac";
 import {
   FILTROS_INICIALES, OPCIONES_RIESGO, OPCIONES_TDAH, PROB_COLORS, RIESGO_COLORS,
@@ -625,6 +625,10 @@ export default function App() {
   const [listaEditAlumno, setListaEditAlumno] = useState(null);
   const [listaEditForm, setListaEditForm] = useState({});
   const [listaStatus, setListaStatus] = useState({ msg: "", error: false });
+  const [borrandoAlumno, setBorrandoAlumno] = useState(null);
+  // Los avisos del modal de edición no pueden ir en listaStatus: se pinta sobre
+  // la tabla, detrás del overlay, así que el usuario no veía por qué no guardaba.
+  const [listaEditError, setListaEditError] = useState("");
   const [predicciones, setPredicciones] = useState([]);
   const [alumnoFormError, setAlumnoFormError] = useState("");
   // Un campo obligatorio vacío no es un error mientras el usuario no haya
@@ -667,6 +671,7 @@ export default function App() {
     // Control de acceso: el rol no puede navegar a vistas que no tiene permitidas.
     if (!puedeVer(auth.rol, v)) return;
     setActiveView(v);
+    guardarVista(v);
     setStatus({ msg: "", error: false });
     setAlumnoFormError("");
     setEncuestaStatus({ msg: "", error: false });
@@ -681,7 +686,10 @@ export default function App() {
   // Seguridad: si el rol activo no tiene permiso para la vista actual, se le
   // devuelve a la primera vista que sí tiene permitida.
   useEffect(() => {
-    if (auth.logged && !puedeVer(auth.rol, activeView)) setActiveView(vistaInicial(auth.rol));
+    if (auth.logged && !puedeVer(auth.rol, activeView)) {
+      setActiveView(vistaInicial(auth.rol));
+      guardarVista(vistaInicial(auth.rol));
+    }
   }, [activeView, auth.rol, auth.logged]);
 
   // Las vistas de panorama y listado necesitan las predicciones de todos los
@@ -822,6 +830,7 @@ export default function App() {
     borrarToken();
     setAuth({ usuario: "", password: "", logged: false, rol: "", nombre: "" });
     setActiveView("dashboard");
+    guardarVista("dashboard");
     setAlumnos([]);
     setPredicciones([]);
     setTodosPredicciones([]);
@@ -846,7 +855,10 @@ export default function App() {
         if (cancelado) return;
         setAuth({ usuario: u.usuario, password: "", logged: true, rol: u.rol,
                   nombre: u.nombre });
-        setActiveView(vistaInicial(u.rol));
+        // Al recargar se vuelve a la vista en que estaba, no al inicio. Se
+        // valida contra sus permisos: el rol pudo cambiar desde entonces.
+        const guardada = leerVista();
+        setActiveView(guardada && puedeVer(u.rol, guardada) ? guardada : vistaInicial(u.rol));
       })
       .catch(() => { if (!cancelado) borrarToken(); })
       .finally(() => { if (!cancelado) setRestaurando(false); });
@@ -898,6 +910,7 @@ export default function App() {
         nombre: r.usuario.nombre,
       });
       setActiveView(vistaInicial(r.usuario.rol));
+      guardarVista(vistaInicial(r.usuario.rol));
       notify(`Sesión iniciada como ${r.usuario.rol}.`);
     } catch (err) {
       // El servidor ya responde «Credenciales inválidas»; el texto de reserva
@@ -2095,7 +2108,10 @@ export default function App() {
           // ahora su propio trío fondo/texto/borde definido en la hoja de estilos.
           const estadoAlumno = (id) => {
             const p = predsPorAlumno[id];
-            if (!p) return { label: "Sin predicción", variante: "neutro" };
+            // «Registrado» y no «Sin predicción»: el estado describe en qué
+            // punto del proceso está el alumno, no lo que le falta. Es además
+            // lo que especifica HU0005-1.
+            if (!p) return { label: "Registrado", variante: "neutro" };
             if (p.nivel_riesgo) return { label: "Con Predicción", variante: "clinico" };
             return { label: "Evaluado", variante: "ok" };
           };
@@ -2116,6 +2132,7 @@ export default function App() {
               }
             }
 
+            setListaEditError("");
             setListaEditAlumno(a.id);
             setListaEditForm({
               nombre: a.nombre, apellido: a.apellido, edad: a.edad,
@@ -2133,13 +2150,21 @@ export default function App() {
           const guardarEdicion = async () => {
             const doc = TIPOS_DOCUMENTO[listaEditForm.tipo_documento ?? "DNI"];
             const numero = (listaEditForm.numero_documento || "").trim().toUpperCase();
+            setListaEditError("");
             if (!RE_NOMBRE.test((listaEditForm.nombre || "").trim()) ||
                 !RE_NOMBRE.test((listaEditForm.apellido || "").trim())) {
-              setListaStatus({ msg: "El nombre y el apellido solo admiten letras, números, espacios, apóstrofo y guion.", error: true });
+              setListaEditError("El nombre y el apellido solo admiten letras, números, espacios, apóstrofo y guion.");
+              return;
+            }
+            // El servidor solo acepta 11 o 12 años. Comprobarlo aquí evita un
+            // viaje perdido y, sobre todo, deja el aviso en el propio modal.
+            const edad = Number(listaEditForm.edad);
+            if (!Number.isInteger(edad) || edad < 11 || edad > 12) {
+              setListaEditError("La edad debe ser 11 o 12 años: el instrumento EDAH solo está validado para el tramo de 6° de primaria a 1° de secundaria.");
               return;
             }
             if (!doc.patron.test(numero)) {
-              setListaStatus({ msg: `${doc.etiqueta}: ${doc.ayuda} Has escrito ${numero.length} de ${doc.longitud}.`, error: true });
+              setListaEditError(`${doc.etiqueta}: ${doc.ayuda} Has escrito ${numero.length} de ${doc.longitud}.`);
               return;
             }
             // El diálogo enumera exactamente qué campos cambian y con qué valores,
@@ -2198,16 +2223,24 @@ export default function App() {
               setListaEditAlumno(null);
               setListaStatus({ msg: "Alumno actualizado correctamente.", error: false });
             } catch (err) {
-              setListaStatus({ msg: err.message || "Error al actualizar.", error: true });
+              setListaEditError(err.message || "Error al actualizar.");
             }
           };
 
           const eliminarAlumno = async (id, nombre) => {
             const victima = alumnos.find((a) => String(a.id) === String(id));
             const suPrediccion = (todosPredicciones ?? []).filter((p) => String(p.alumno) === String(id)).length;
-            // Un alumno con historial no se puede borrar: el servidor lo
-            // rechaza. Se avisa aquí para no prometer algo que no va a ocurrir.
-            const tieneHistorial = suPrediccion > 0;
+            // Las inasistencias registradas por fecha TAMBIÉN son historial y
+            // también impiden el borrado: la fila de asistencia referencia al
+            // alumno y la base lo rechaza. Antes solo se miraban las
+            // predicciones, así que a un alumno con faltas se le prometía «no
+            // tiene historial asociado» y el servidor lo rechazaba después con
+            // un error que no explicaba nada.
+            // Se usa «faltas_registradas» y no «inasistencias» porque esta
+            // última incluye el contador heredado, que no bloquea nada.
+            const susFaltas = Number(victima?.faltas_registradas ?? 0);
+            const tieneHistorial = suPrediccion > 0 || susFaltas > 0;
+            const soloFaltas = susFaltas > 0 && suPrediccion === 0;
 
             if (!await confirmar({
               titulo: tieneHistorial
@@ -2218,6 +2251,10 @@ export default function App() {
                 + "permite borrarlo: esos datos sostienen las predicciones y no se "
                 + "podrían recuperar. Para darlo de baja hay que retirar antes su "
                 + "historial, de forma deliberada."
+                + (soloFaltas
+                    ? " En este caso son sus inasistencias: retíralas una a una "
+                    + "desde «Control de Inasistencias» y entonces sí podrás eliminarlo."
+                    : "")
                 : "Se eliminará la ficha del estudiante. No tiene historial "
                 + "asociado, así que no se pierde ningún dato de evaluación. "
                 + "Esta acción no se puede deshacer.",
@@ -2227,17 +2264,29 @@ export default function App() {
                 { etiqueta: "Predicciones", valor: suPrediccion === 0
                     ? "ninguna registrada"
                     : `${suPrediccion} en su historial` },
+                { etiqueta: "Inasistencias", valor: susFaltas === 0
+                    ? "ninguna registrada"
+                    : `${susFaltas} día(s) registrado(s)` },
               ],
               tono: "peligro",
               textoConfirmar: tieneHistorial ? "Intentar igualmente" : "Sí, eliminar",
             })) return;
+
+            // Borrar recarga dos listas y tarda varios segundos. Sin señal, el
+            // alumno sigue en pantalla y el usuario cree que no pasó nada.
+            setBorrandoAlumno(id);
             try {
               await req(`/alumnos/${id}/`, { method: "DELETE" });
               await loadAlumnos();
               await loadTodosPredicciones();
-              setListaStatus({ msg: "Alumno eliminado.", error: false });
+              setListaStatus({ msg: `${nombre} eliminado.`, error: false });
             } catch (err) {
               setListaStatus({ msg: err.message || "Error al eliminar.", error: true });
+            } finally {
+              // El aviso se pinta sobre la tabla y con la lista larga el usuario
+              // no lo veia: si fallo, no se enteraba de por que.
+              window.scrollTo({ top: 0, behavior: "smooth" });
+              setBorrandoAlumno(null);
             }
           };
 
@@ -2250,7 +2299,12 @@ export default function App() {
                 </p>
               )}
               {listaStatus.msg && (
-                <div className={listaStatus.error ? "alert-error" : "alert-success"} style={{ marginBottom: 14 }}>
+                <div
+                  className={listaStatus.error ? "alert-error" : "alert-success"}
+                  style={{ marginBottom: 14 }}
+                  role={listaStatus.error ? "alert" : "status"}
+                  aria-live={listaStatus.error ? "assertive" : "polite"}
+                >
                   {listaStatus.msg}
                 </div>
               )}
@@ -2302,7 +2356,7 @@ export default function App() {
 
               {/* Modal Editar */}
               {listaEditAlumno && (
-                <div className="lista-modal-overlay" onClick={() => setListaEditAlumno(null)}>
+                <div className="lista-modal-overlay" onClick={() => { setListaEditError(""); setListaEditAlumno(null); }}>
                   <div className="lista-modal" onClick={(e) => e.stopPropagation()}>
                     <h3 style={{ margin: "0 0 14px" }}>Editar Alumno</h3>
                     <div className="grid" style={{ gap: 10 }}>
@@ -2388,9 +2442,14 @@ export default function App() {
                         </select>
                       </div>
                     </div>
+                    {listaEditError && (
+                      <p className="alert-error" role="alert" style={{ marginTop: 14, marginBottom: 0 }}>
+                        {listaEditError}
+                      </p>
+                    )}
                     <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                       <button onClick={guardarEdicion}>Guardar</button>
-                      <button className="danger" onClick={() => setListaEditAlumno(null)}>Cancelar</button>
+                      <button className="danger" onClick={() => { setListaEditError(""); setListaEditAlumno(null); }}>Cancelar</button>
                     </div>
                   </div>
                 </div>
@@ -2436,7 +2495,13 @@ export default function App() {
                                 {!soloLectura && (
                                   <>
                                     <button className="lista-btn lista-btn--edit" onClick={() => iniciarEdicion(a)}>Editar</button>
-                                    <button className="lista-btn lista-btn--del" onClick={() => eliminarAlumno(a.id, `${a.nombre} ${a.apellido}`)}>Eliminar</button>
+                                    <button
+                                      className="lista-btn lista-btn--del"
+                                      onClick={() => eliminarAlumno(a.id, `${a.nombre} ${a.apellido}`)}
+                                      disabled={borrandoAlumno !== null}
+                                    >
+                                      {String(borrandoAlumno) === String(a.id) ? "Eliminando…" : "Eliminar"}
+                                    </button>
                                   </>
                                 )}
                                 {puedeVer(auth.rol, "encuesta") && (

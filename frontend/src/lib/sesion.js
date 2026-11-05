@@ -33,3 +33,30 @@ export function borrarToken() {
     /* nada que borrar */
   }
 }
+
+/**
+ * Última vista visitada, para que F5 no devuelva al usuario al inicio.
+ *
+ * Va en `sessionStorage` por el mismo motivo que el token: muere con la
+ * pestaña. Quien lo lea debe comprobar que el rol activo puede ver esa vista;
+ * aquí no se valida nada, es solo almacenamiento.
+ */
+const CLAVE_VISTA = "tesis.vista";
+
+/** @returns {string|null} */
+export function leerVista() {
+  try {
+    return sessionStorage.getItem(CLAVE_VISTA);
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} vista */
+export function guardarVista(vista) {
+  try {
+    sessionStorage.setItem(CLAVE_VISTA, vista);
+  } catch {
+    /* sin almacenamiento: al recargar se abrirá la vista inicial */
+  }
+}

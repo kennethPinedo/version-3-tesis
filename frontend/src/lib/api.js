@@ -38,7 +38,10 @@ async function mensajeDeError(res) {
       return detail
         .map((d) => {
           const campo = Array.isArray(d.loc) ? d.loc[d.loc.length - 1] : "";
-          return campo ? `${campo}: ${d.msg}` : d.msg;
+          // Pydantic v2 prefija los mensajes de field_validator con «Value
+          // error, », en inglés y delante de un texto ya redactado en español.
+          const msg = String(d.msg ?? "").replace(/^Value error,\s*/, "");
+          return campo ? `${campo}: ${msg}` : msg;
         })
         .join(" · ");
     }
